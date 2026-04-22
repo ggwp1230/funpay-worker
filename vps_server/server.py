@@ -292,6 +292,29 @@ document.getElementById('admin-token').addEventListener('keydown', e => {{
 </body>
 </html>"""
 
+@app.post("/api/vps/register")
+def vps_register(data: dict):
+    otp = data.get("otp", "").upper().strip()
+    otp_file = Path("otps") / f"{otp}.json"
+    
+    if not otp_file.exists():
+        return {"error": "invalid_otp"}
+    
+    import time, json
+    otp_data = json.loads(otp_file.read_text())
+    if time.time() - otp_data["created_at"] > 300:
+        otp_file.unlink()
+        return {"error": "expired_otp"}
+    
+    otp_file.unlink()
+    token = "fp_" + hashlib.sha256(f"{otp}{time.time()}".encode()).hexdigest()[:32]
+    return {"token": token, "version": "1.0.0"}
+
+
+@app.get("/api/version")
+def api_version():
+    meta = load_meta()
+    return {"version": meta["version"]}
 
 if __name__ == "__main__":
     print(f"[UpdateServer] Starting on port {PORT}")
