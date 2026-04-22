@@ -6,36 +6,30 @@ on:
     paths:
       - 'vps_server/**'
       - '.github/workflows/docker-publish.yml'
-  workflow_dispatch:        # запуск вручную из GitHub UI кнопкой
+  workflow_dispatch:
 
 env:
-  REGISTRY: ghcr.io
-  IMAGE_NAME: ghcr.io/ggwp1230/funpay-worker
+  IMAGE_NAME: marsreklamatop/funpay-worker
 
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write       # нужно для push в ghcr.io
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Log in to GitHub Container Registry
+      - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}   # токен создаётся автоматически, ничего настраивать не надо
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract version from version.json
+      - name: Extract version
         id: version
         run: |
           VERSION=$(cat backend/version.json | python3 -c "import sys,json; print(json.load(sys.stdin)['version'])")
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Building version: $VERSION"
 
       - name: Build and push
         uses: docker/build-push-action@v5
