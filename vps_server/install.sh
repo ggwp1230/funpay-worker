@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# curl -sSL http://funpaybot.duckdns.org:9000/install.sh | sudo bash
+# curl -sSL https://raw.githubusercontent.com/ggwp1230/funpay-worker/main/vps_server/install.sh | sudo bash
 set -euo pipefail
 
 # ── Цвета ────────────────────────────────────────────────────────────────────
