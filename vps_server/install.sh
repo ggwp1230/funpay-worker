@@ -12,8 +12,8 @@ APP_NAME="funpay-worker"
 APP_DIR="/opt/funpay-worker"
 DATA_VOL="funpay-worker_funpay-data"
 PORT="${PORT:-8000}"
-REGISTRY="${REGISTRY:-ghcr.io/ggwp1230}"
-IMAGE="${REGISTRY}/${APP_NAME}"
+REGISTRY="${REGISTRY:-docker.io}"
+IMAGE="marsreklamatop/funpay-worker"
 
 # ── Центральный API (замените на свой) ────────────────────────────────────────
 API_URL="${API_URL:-http://funpaybot.duckdns.org:9000}"
