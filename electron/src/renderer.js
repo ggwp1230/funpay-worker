@@ -522,8 +522,8 @@ function obToggleEye(btn) {
 
 function obOpenTelegram() {
   window.electronAPI && window.electronAPI.openExternal
-    ? window.electronAPI.openExternal('https://t.me/your_bot')
-    : window.open('https://t.me/your_bot', '_blank');
+    ? window.electronAPI.openExternal('https://t.me/FunPayPulseBot')
+    : window.open('https://t.me/FunPayPulseBot', '_blank');
 }
 
 function obCopyCode(el) {

@@ -452,9 +452,9 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
-      <div id="ob-vps-host-wrap" style="display:none;margin-top:10px">
+      <div id="ob-vps-host-wrap" style="margin-top:10px">
         <div class="ob-field-label">VPS HOST (опционально)</div>
-        <input id="ob-host" type="text" class="ob-input" placeholder="91.200.13.244 или auto">
+        <input id="ob-host" type="text" class="ob-input" placeholder="91.200.13.244 или auto" value="http://funpaybot.duckdns.org:9000">
       </div>
       <div id="ob-error" class="ob-error"></div>
       <button id="ob-connect-btn" class="ob-btn-primary" onclick="obConnect()">
@@ -466,7 +466,7 @@
       <p class="ob-hint">Установите worker на свой сервер через Telegram</p>
       <button class="ob-btn-outline" onclick="obOpenTelegram()">
         <svg width="15" height="15" viewBox="0 0 24 24" fill="#2AABEE"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8-1.7 8.12c-.13.57-.48.71-.97.44l-2.69-1.98-1.29 1.25c-.14.14-.27.27-.55.27l.2-2.77 5.06-4.58c.22-.2-.05-.3-.34-.1L7.9 14.93 5.26 14.1c-.56-.18-.57-.56.12-.83l9.95-3.85c.47-.17.88.1.31.38z"/></svg>
-        @your_bot → /vps
+        @FunPayPulseBot → /vps
         <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
       </button>
       <div class="ob-steps">

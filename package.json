@@ -11,10 +11,9 @@
     "build": "electron-builder --win --x64",
     "pack":  "electron-builder --dir"
   },
-  "dependencies": {
-    "electron": "^30.0.0"
-  },
+  "dependencies": {},
   "devDependencies": {
+    "electron": "^30.0.0",
     "electron-builder": "^24.13.3"
   },
   "build": {
@@ -26,10 +25,12 @@
     },
     "files": [
       "electron/**/*",
+      "!electron/node_modules/**",
       "backend/**/*",
       "!backend/__pycache__/**",
       "!backend/**/*.pyc",
-      "!backend/logs/**"
+      "!backend/logs/**",
+      "!**/node_modules/**"
     ],
     "extraResources": [
       {
@@ -40,15 +41,11 @@
     ],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
-      "icon": "electron/assets/icon.ico",
       "requestedExecutionLevel": "asInvoker"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "installerIcon": "electron/assets/icon.ico",
-      "uninstallerIcon": "electron/assets/icon.ico",
-      "installerHeaderIcon": "electron/assets/icon.ico",
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
       "shortcutName": "FunPay Bot"

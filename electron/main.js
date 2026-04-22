@@ -1,60 +1,137 @@
 'use strict';
 
 const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell } = require('electron');
-const path  = require('path');
-const { spawn, execSync } = require('child_process');
-const http  = require('http');
-const fs    = require('fs');
+const path    = require('path');
+const { spawn, execSync, spawnSync } = require('child_process');
+const http    = require('http');
+const net     = require('net');
+const fs      = require('fs');
 
 // ──────────────────────────────────────────────────
 // Paths
 // ──────────────────────────────────────────────────
-const ROOT       = path.join(__dirname, '..');
-const BACKEND    = path.join(ROOT, 'backend');
-const PYTHON_WIN = path.join(ROOT, 'python', 'python.exe');
-const PYTHON_SYS = process.platform === 'win32' ? 'python' : 'python3';
+const IS_PACKAGED = app.isPackaged;
+
+// В собранном приложении backend лежит в resources/backend
+// В dev режиме — рядом с electron/
+const BACKEND = IS_PACKAGED
+  ? path.join(process.resourcesPath, 'backend')
+  : path.join(__dirname, '..', 'backend');
 
 // ──────────────────────────────────────────────────
 // State
 // ──────────────────────────────────────────────────
-let mainWindow = null;
-let tray       = null;
-let pyProc     = null;
+let mainWindow   = null;
+let tray         = null;
+let pyProc       = null;
 let backendReady = false;
 const API_PORT   = 8765;
 const API_URL    = `http://127.0.0.1:${API_PORT}`;
 
 // ──────────────────────────────────────────────────
-// Python backend
+// Убиваем старый процесс на порту
 // ──────────────────────────────────────────────────
-function getPython() {
-  if (fs.existsSync(PYTHON_WIN)) return PYTHON_WIN;
-
-  if (process.platform === 'win32') {
-    try {
-      const whereOut = execSync('where python', { encoding: 'utf8', timeout: 5000 });
-      const candidates = whereOut.split('\n').map(function(s) { return s.trim(); }).filter(Boolean);
-      for (var i = 0; i < candidates.length; i++) {
-        var candidate = candidates[i];
-        try {
-          execSync('"' + candidate + '" -c "import lxml"', { timeout: 5000 });
-          console.log('[Electron] Using Python with lxml: ' + candidate);
-          return candidate;
-        } catch (e) {
-          console.log('[Electron] Skipping ' + candidate + ' (no lxml)');
-        }
+function freePort(port) {
+  try {
+    const out = execSync(
+      `netstat -ano | findstr "127.0.0.1:${port} " | findstr "LISTENING"`,
+      { encoding: 'utf8', timeout: 5000 }
+    );
+    const lines = out.trim().split('\n').filter(Boolean);
+    for (const line of lines) {
+      const parts = line.trim().split(/\s+/);
+      const pid = parts[parts.length - 1];
+      if (pid && /^\d+$/.test(pid) && pid !== '0') {
+        try { execSync(`taskkill /F /PID ${pid}`, { timeout: 3000 }); } catch (_) {}
       }
-    } catch (e) {}
-  }
-
-  return PYTHON_SYS;
+    }
+  } catch (_) {}
 }
 
-function startBackend() {
+function isPortFree(port) {
+  return new Promise(resolve => {
+    const s = net.createServer();
+    s.once('error', () => resolve(false));
+    s.once('listening', () => { s.close(); resolve(true); });
+    s.listen(port, '127.0.0.1');
+  });
+}
+
+// ──────────────────────────────────────────────────
+// Python detection
+// ──────────────────────────────────────────────────
+function getPython() {
+  // Список кандидатов для поиска
+  const candidates = [];
+
+  if (process.platform === 'win32') {
+    // 1. Сначала пробуем найти через where python
+    try {
+      const whereOut = execSync('where python', { encoding: 'utf8', timeout: 5000 });
+      const found = whereOut.split('\n').map(s => s.trim()).filter(Boolean);
+      candidates.push(...found);
+    } catch (_) {}
+
+    // 2. Стандартные пути установки Python
+    const pyVers = ['313', '312', '311', '310', '39', '38'];
+    for (const v of pyVers) {
+      candidates.push(`C:\\Python${v}\\python.exe`);
+      candidates.push(`${process.env.LOCALAPPDATA}\\Programs\\Python\\Python${v}\\python.exe`);
+    }
+    candidates.push('python');
+  } else {
+    candidates.push('python3', 'python');
+  }
+
+  // Проверяем каждый кандидат — нужен Python с нужными модулями
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      // Проверяем что Python существует и работает
+      const result = spawnSync(candidate, ['-c', 'import fastapi, uvicorn; print("ok")'], {
+        timeout: 8000,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      if (result.stdout && result.stdout.includes('ok')) {
+        console.log('[Electron] Found Python with fastapi: ' + candidate);
+        return candidate;
+      }
+    } catch (_) {}
+  }
+
+  // Fallback — просто python
+  console.log('[Electron] Using fallback python');
+  return process.platform === 'win32' ? 'python' : 'python3';
+}
+
+// ──────────────────────────────────────────────────
+// Backend
+// ──────────────────────────────────────────────────
+async function startBackend() {
+  // Освобождаем порт если занят
+  const free = await isPortFree(API_PORT);
+  if (!free) {
+    console.log(`[Electron] Port ${API_PORT} busy, killing...`);
+    freePort(API_PORT);
+    await new Promise(r => setTimeout(r, 500));
+  }
+
   const python = getPython();
   const script = path.join(BACKEND, 'main.py');
 
-  console.log('[Electron] Starting backend: ' + python + ' ' + script);
+  console.log('[Electron] Backend path: ' + BACKEND);
+  console.log('[Electron] Script: ' + script);
+  console.log('[Electron] Python: ' + python);
+
+  if (!fs.existsSync(script)) {
+    console.error('[Electron] main.py not found at: ' + script);
+    if (mainWindow) mainWindow.webContents.send('backend-status', {
+      ready: false,
+      error: 'main.py не найден: ' + script
+    });
+    return;
+  }
 
   pyProc = spawn(python, [script], {
     cwd: BACKEND,
@@ -62,50 +139,59 @@ function startBackend() {
     windowsHide: true,
   });
 
-  pyProc.stdout.on('data', function(d) {
+  pyProc.stdout.on('data', d => {
     const line = d.toString().trim();
     if (line) console.log('[PY] ' + line);
-    if (mainWindow) mainWindow.webContents.send('py-log', { level: 'info', text: line });
   });
 
-  pyProc.stderr.on('data', function(d) {
+  pyProc.stderr.on('data', d => {
     const line = d.toString().trim();
-    if (line) console.error('[PY-ERR] ' + line);
-    if (mainWindow) mainWindow.webContents.send('py-log', { level: 'error', text: line });
+    if (!line) return;
+    if (line.includes('INFO:') && !line.includes('ERROR')) return;
+    console.error('[PY-ERR] ' + line);
   });
 
-  pyProc.on('exit', function(code, signal) {
-    console.log('[Electron] Python exited: code=' + code + ' signal=' + signal);
+  pyProc.on('exit', (code, signal) => {
+    console.log(`[Electron] Python exited: code=${code} signal=${signal}`);
     backendReady = false;
-    if (mainWindow) mainWindow.webContents.send('backend-status', { ready: false, code: code });
+    if (mainWindow) mainWindow.webContents.send('backend-status', { ready: false, code });
+  });
+
+  pyProc.on('error', err => {
+    console.error('[Electron] Failed to start Python: ' + err.message);
+    if (mainWindow) mainWindow.webContents.send('backend-status', {
+      ready: false,
+      error: `Не удалось запустить Python.\n\nУбедитесь что Python установлен и выполните:\npip install fastapi uvicorn requests beautifulsoup4 lxml\n\nОшибка: ${err.message}`
+    });
   });
 }
 
 function stopBackend() {
-  if (pyProc) {
-    try { pyProc.kill('SIGTERM'); } catch (e) {}
-    pyProc = null;
-  }
+  if (!pyProc) return;
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('taskkill', ['/F', '/T', '/PID', String(pyProc.pid)], { timeout: 3000 });
+    } else {
+      pyProc.kill('SIGTERM');
+    }
+  } catch (_) {}
+  pyProc = null;
 }
 
-function waitForBackend(retries, delay) {
-  retries = retries || 30;
-  delay = delay || 500;
-  return new Promise(function(resolve, reject) {
+function waitForBackend(retries = 40, delay = 500) {
+  return new Promise((resolve, reject) => {
     let tries = 0;
     function check() {
-      http.get(API_URL + '/api/ping', function(res) {
-        if (res.statusCode === 200) {
-          backendReady = true;
-          resolve();
-        } else {
-          retry();
-        }
-      }).on('error', retry);
+      const req = http.get(API_URL + '/api/ping', res => {
+        if (res.statusCode === 200) { backendReady = true; resolve(); }
+        else retry();
+        res.resume();
+      });
+      req.on('error', retry);
+      req.setTimeout(1000, () => { req.destroy(); retry(); });
     }
     function retry() {
-      tries++;
-      if (tries >= retries) return reject(new Error('Backend timeout'));
+      if (++tries >= retries) return reject(new Error('Backend не запустился. Убедитесь что Python установлен с зависимостями:\npip install fastapi uvicorn requests beautifulsoup4 lxml requests-toolbelt'));
       setTimeout(check, delay);
     }
     check();
@@ -128,22 +214,13 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
     },
-    icon: path.join(__dirname, 'assets', 'icon.png'),
     show: false,
   });
 
   mainWindow.loadFile(path.join(__dirname, 'src', 'index.html'));
-
-  mainWindow.once('ready-to-show', function() {
-    mainWindow.show();
-  });
-
-  mainWindow.on('close', function(e) {
-    e.preventDefault();
-    mainWindow.hide();
-  });
-
-  mainWindow.on('closed', function() { mainWindow = null; });
+  mainWindow.once('ready-to-show', () => mainWindow.show());
+  mainWindow.on('close', e => { e.preventDefault(); mainWindow.hide(); });
+  mainWindow.on('closed', () => { mainWindow = null; });
 }
 
 function createTray() {
@@ -154,64 +231,57 @@ function createTray() {
 
   tray = new Tray(img);
   tray.setToolTip('FunPay Bot');
-  const menu = Menu.buildFromTemplate([
-    { label: 'Open', click: function() { if (mainWindow) mainWindow.show(); } },
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: 'Открыть', click: () => mainWindow?.show() },
     { type: 'separator' },
-    { label: 'Quit', click: function() { app.quit(); } },
-  ]);
-  tray.setContextMenu(menu);
-  tray.on('double-click', function() { if (mainWindow) mainWindow.show(); });
+    { label: 'Выход', click: () => app.quit() },
+  ]));
+  tray.on('double-click', () => mainWindow?.show());
 }
 
 // ──────────────────────────────────────────────────
 // IPC
 // ──────────────────────────────────────────────────
-ipcMain.handle('app-minimize', function() { if (mainWindow) mainWindow.minimize(); });
-ipcMain.handle('app-maximize', function() {
+ipcMain.handle('app-minimize', () => mainWindow?.minimize());
+ipcMain.handle('app-maximize', () => {
   if (!mainWindow) return;
-  if (mainWindow.isMaximized()) mainWindow.unmaximize();
-  else mainWindow.maximize();
+  mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
 });
-ipcMain.handle('app-close',   function() { if (mainWindow) mainWindow.hide(); });
-ipcMain.handle('app-quit',    function() { app.quit(); });
-ipcMain.handle('app-version', function() { return app.getVersion(); });
-ipcMain.handle('open-logs-folder', function() {
-  shell.openPath(path.join(BACKEND, 'logs'));
-});
-ipcMain.handle('backend-url',   function() { return API_URL; });
-ipcMain.handle('backend-ready', function() { return backendReady; });
+ipcMain.handle('app-close',   () => mainWindow?.hide());
+ipcMain.handle('app-quit',    () => app.quit());
+ipcMain.handle('app-version', () => app.getVersion());
+ipcMain.handle('open-logs-folder', () => shell.openPath(path.join(BACKEND, 'logs')));
+ipcMain.handle('backend-url',   () => API_URL);
+ipcMain.handle('backend-ready', () => backendReady);
 
 // ──────────────────────────────────────────────────
 // App lifecycle
 // ──────────────────────────────────────────────────
-app.whenReady().then(async function() {
+app.whenReady().then(async () => {
   createWindow();
   createTray();
-  startBackend();
+  await startBackend();
 
   try {
     await waitForBackend(40, 500);
     console.log('[Electron] Backend ready');
-    if (mainWindow) mainWindow.webContents.send('backend-status', { ready: true });
+    mainWindow?.webContents.send('backend-status', { ready: true });
   } catch (err) {
     console.error('[Electron] Backend failed: ' + err.message);
-    if (mainWindow) mainWindow.webContents.send('backend-status', { ready: false, error: err.message });
+    mainWindow?.webContents.send('backend-status', { ready: false, error: err.message });
   }
 });
 
-app.on('before-quit', function() {
-  if (mainWindow) mainWindow.removeAllListeners('close');
+app.on('before-quit', () => {
+  mainWindow?.removeAllListeners('close');
   stopBackend();
 });
 
-app.on('window-all-closed', function() {
-  if (process.platform !== 'darwin') {
-    stopBackend();
-    app.quit();
-  }
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') { stopBackend(); app.quit(); }
 });
 
-app.on('activate', function() {
+app.on('activate', () => {
   if (!mainWindow) createWindow();
   else mainWindow.show();
 });
