@@ -1,0 +1,572 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:8765 ws://127.0.0.1:8765 https://fonts.googleapis.com https://fonts.gstatic.com">
+<title>FunPay Bot</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
+<style>
+/* Fallback: если Syne не загрузился (нет интернета) — stat-val отображается системным шрифтом */
+@font-face {
+  font-family: 'Syne';
+  src: local('Segoe UI Bold'), local('SegoeUI-Bold'), local('Arial Bold'), local('Helvetica Bold');
+  font-weight: 800;
+  font-display: swap;
+}
+</style>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<!-- SPLASH -->
+<div id="splash">
+  <div class="splash-icon">⚡</div>
+  <div class="splash-title">FunPay Bot</div>
+  <div class="splash-sub" id="splash-msg">Запуск Python бэкенда...</div>
+  <div class="splash-bar"><div class="splash-progress"></div></div>
+</div>
+
+<!-- TITLEBAR -->
+<div id="titlebar">
+  <div class="tb-logo">
+    <div class="tb-icon">⚡</div>
+    <span class="tb-name">FunPay Bot</span>
+  </div>
+  <div class="tb-status">
+    <div class="status-dot" id="status-dot"></div>
+    <span id="status-text">Остановлен</span>
+  </div>
+  <div class="tb-spacer"></div>
+  <div class="tb-btns">
+    <!-- WS connection indicator -->
+    <div id="ws-indicator" title="WebSocket соединение с бэкендом" style="margin-right:6px;align-self:center;"></div>
+    <button class="tb-btn" onclick="electron.minimize()" title="Свернуть">─</button>
+    <button class="tb-btn" onclick="electron.maximize()" title="Развернуть">□</button>
+    <button class="tb-btn close" onclick="electron.close()" title="Свернуть в трей">✕</button>
+  </div>
+</div>
+
+<!-- APP -->
+<div id="app">
+  <!-- SIDEBAR -->
+  <nav id="sidebar">
+    <div class="nav-section">Меню</div>
+    <div class="nav-item active" id="nav-dashboard" onclick="go('dashboard')">
+      <span class="nav-icon">◈</span> Дашборд
+    </div>
+    <div class="nav-item" id="nav-logs" onclick="go('logs')">
+      <span class="nav-icon">≡</span> Логи
+    </div>
+    <div class="nav-item" id="nav-ar" onclick="go('ar')">
+      <span class="nav-icon">↩</span> Авто-ответы
+    </div>
+    <div class="nav-item" id="nav-raise" onclick="go('raise')">
+      <span class="nav-icon">↑</span> Авто-поднятие
+    </div>
+    <div class="nav-item" id="nav-settings" onclick="go('settings')">
+      <span class="nav-icon">⊙</span> Настройки
+    </div>
+
+    <div class="nav-item" id="nav-update" onclick="go('update')">
+      <span class="nav-icon" id="update-nav-icon">↑</span> Обновления
+    </div>
+
+    <div class="nav-sep"></div>
+    <div class="nav-section">Управление</div>
+    <div class="nav-item" id="nav-start" onclick="startBot()">
+      <span class="nav-icon" style="color:var(--green)">▷</span> Запустить
+    </div>
+    <div class="nav-item" id="nav-stop" onclick="stopBot()">
+      <span class="nav-icon" style="color:var(--red)">□</span> Остановить
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="text-dim" id="ver-label">v1.0.0</div>
+    </div>
+  </nav>
+
+  <!-- CONTENT -->
+  <div id="content">
+
+    <!-- DASHBOARD -->
+    <div class="page active" id="page-dashboard">
+
+      <!-- Account card -->
+      <div class="card" id="acc-card">
+        <div class="card-hd">
+          <div class="card-title">Аккаунт FunPay</div>
+          <div style="display:flex;gap:8px">
+            <button class="btn btn-sm" id="btn-connect" onclick="doConnect()">⚡ Подключить</button>
+            <button class="btn btn-sm" onclick="doRefresh()">↻ Обновить</button>
+          </div>
+        </div>
+        <div id="acc-block">
+          <div class="acc-disconnected">
+            <div class="acc-dis-icon">◈</div>
+            <div>
+              <div style="font-weight:600;margin-bottom:4px">Аккаунт не подключён</div>
+              <div style="color:var(--muted);font-size:11px">Укажите golden_key в Настройках и нажмите «Подключить»</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- FunPay real stats -->
+      <div class="section-label">Данные FunPay</div>
+      <div class="stats-grid fp-stats">
+        <div class="stat-box stat-fp">
+          <div class="stat-label">Баланс</div>
+          <div class="stat-val" id="fp-balance">—</div>
+          <div class="stat-sub" id="fp-currency"></div>
+        </div>
+        <div class="stat-box stat-fp">
+          <div class="stat-label">Активных продаж</div>
+          <div class="stat-val" id="fp-sales" style="color:var(--green)">—</div>
+          <div class="stat-sub">открытые заказы</div>
+        </div>
+        <div class="stat-box stat-fp">
+          <div class="stat-label">Активных покупок</div>
+          <div class="stat-val" id="fp-purchases" style="color:var(--orange)">—</div>
+          <div class="stat-sub">незакрытые покупки</div>
+        </div>
+      </div>
+
+      <!-- Bot session stats -->
+      <div class="section-label">Статистика сессии бота</div>
+      <div class="stats-grid">
+        <div class="stat-box">
+          <div class="stat-label">Получено сообщений</div>
+          <div class="stat-val" id="s-rcv">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Отправлено сообщений</div>
+          <div class="stat-val" id="s-snt">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Заказов обработано</div>
+          <div class="stat-val" id="s-ord">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Лотов поднято</div>
+          <div class="stat-val" id="s-rsd">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Отзывов отправлено</div>
+          <div class="stat-val" id="s-rev">0</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">Время работы</div>
+          <div class="stat-val" id="s-upt" style="font-size:16px">—</div>
+        </div>
+      </div>
+
+      <!-- Controls -->
+      <div class="card">
+        <div class="card-title" style="margin-bottom:12px">Управление</div>
+        <div class="btn-row">
+          <button class="btn btn-success" onclick="startBot()">▷ Запустить бота</button>
+          <button class="btn btn-danger"  onclick="stopBot()">□ Остановить</button>
+          <button class="btn" onclick="doRefresh()">↻ Обновить аккаунт</button>
+          <button class="btn" onclick="electron.openLogsFolder()">Открыть логи</button>
+        </div>
+      </div>
+    </div><!-- /dashboard -->
+
+    <!-- LOGS -->
+    <div class="page" id="page-logs" style="flex:1;min-height:0;">
+      <div id="log-wrap" style="flex:1;min-height:400px;">
+        <div class="log-toolbar">
+          <span style="font-family:Syne,sans-serif;font-weight:700;font-size:12px;">📋 Логи</span>
+          <div style="margin-left:auto;display:flex;gap:5px;flex-wrap:wrap;align-items:center;">
+            <button class="filter-btn on" onclick="setFilter('all',this)">Все</button>
+            <button class="filter-btn" onclick="setFilter('client',this)">client</button>
+            <button class="filter-btn" onclick="setFilter('chat',this)">chat</button>
+            <button class="filter-btn" onclick="setFilter('order',this)">order</button>
+            <button class="filter-btn" onclick="setFilter('auto_response',this)">авто-ответ</button>
+            <button class="filter-btn" onclick="setFilter('auto_raise',this)">поднятие</button>
+            <button class="filter-btn" onclick="setFilter('error',this)">error</button>
+            <button class="btn btn-sm" onclick="clearLogs()" style="margin-left:4px;">🗑 Очистить</button>
+          </div>
+        </div>
+        <div class="log-feed" id="log-feed"></div>
+      </div>
+    </div>
+
+    <!-- AUTO RESPONSE -->
+    <div class="page" id="page-ar">
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">↩ Авто-ответы</div>
+          <label class="toggle">
+            <input type="checkbox" id="ar-on" onchange="patchCfg({'auto_response.enabled':this.checked})">
+            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            <span class="toggle-lbl">Включено</span>
+          </label>
+        </div>
+        <p class="text-dim" style="margin-bottom:14px;">
+          Бот автоматически отвечает на сообщения с ключевыми словами.
+        </p>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <span class="text-dim">Триггеры</span>
+          <button class="btn btn-sm" onclick="addTrigger()">+ Добавить</button>
+        </div>
+        <div class="trigger-list" id="trigger-list">
+          <div class="text-dim">Нет триггеров</div>
+        </div>
+        <div style="margin-top:14px;">
+          <button class="btn btn-primary" onclick="saveAR()">💾 Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- AUTO RAISE -->
+    <div class="page" id="page-raise">
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">
+            ↑ Авто-поднятие лотов
+            <span id="next-raise-label"></span>
+          </div>
+          <label class="toggle">
+            <input type="checkbox" id="raise-on">
+            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            <span class="toggle-lbl">Включено</span>
+          </label>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Интервал (минуты)</label>
+            <input type="number" id="raise-int" value="60" min="1" max="1440">
+          </div>
+        </div>
+        <div class="form-group" style="margin-top:12px;">
+          <label>Категории для поднятия</label>
+          <div id="cats-checkboxes" style="margin-top:6px;">
+            <div class="text-dim">Подключите аккаунт для загрузки категорий</div>
+          </div>
+        </div>
+        <div class="btn-row" style="margin-top:14px;">
+          <button class="btn btn-primary" onclick="saveRaise()">💾 Сохранить</button>
+          <button class="btn" onclick="raiseNow()">↑ Поднять сейчас</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">⭐ Авто-отзыв</div>
+          <label class="toggle">
+            <input type="checkbox" id="rv-on">
+            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            <span class="toggle-lbl">Включено</span>
+          </label>
+        </div>
+        <div class="form-grid">
+          <div class="form-group form-full">
+            <label>Текст отзыва</label>
+            <textarea id="rv-text" rows="3" placeholder="Спасибо за покупку!"></textarea>
+          </div>
+          <div class="form-group">
+            <label>Рейтинг (1–5)</label>
+            <input type="number" id="rv-rating" value="5" min="1" max="5">
+          </div>
+        </div>
+        <div style="margin-top:14px;">
+          <button class="btn btn-primary" onclick="saveReview()">💾 Сохранить</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">👋 Приветствие</div>
+          <label class="toggle">
+            <input type="checkbox" id="gr-on">
+            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            <span class="toggle-lbl">Включено</span>
+          </label>
+        </div>
+        <div class="form-grid">
+          <div class="form-group form-full">
+            <label>Текст приветствия</label>
+            <textarea id="gr-text" rows="2" placeholder="Привет! Чем могу помочь?"></textarea>
+          </div>
+          <div class="form-group">
+            <label>Кулдаун (часов)</label>
+            <input type="number" id="gr-cool" value="24" min="0">
+            <div class="input-hint">Не чаще 1 раза в N часов одному пользователю</div>
+          </div>
+        </div>
+        <div style="margin-top:14px;">
+          <button class="btn btn-primary" onclick="saveGreeting()">💾 Сохранить</button>
+        </div>
+      </div>
+    </div><!-- /raise -->
+
+    <!-- SETTINGS -->
+    <div class="page" id="page-settings">
+      <div class="card">
+        <div class="card-title" style="margin-bottom:14px">⚙️ Настройки подключения</div>
+        <div class="form-grid">
+          <div class="form-group form-full">
+            <label>Golden Key (токен аккаунта)</label>
+            <input type="password" id="cfg-gk" placeholder="Вставьте значение куки golden_key">
+            <div class="input-hint" id="key-hint"></div>
+          </div>
+          <div class="form-group form-full">
+            <label>User Agent (опционально)</label>
+            <input type="text" id="cfg-ua" placeholder="Mozilla/5.0 ...">
+          </div>
+        </div>
+        <div style="margin-top:14px;">
+          <button class="btn btn-primary" onclick="saveSettings()">💾 Сохранить</button>
+        </div>
+        <div style="margin-top:14px;padding:12px;background:var(--bg3);border-radius:6px;
+          border:1px solid var(--border);line-height:1.9;">
+          <div class="text-dim">ℹ️ Как найти golden_key</div>
+          <div class="mt8 text-dim" style="color:var(--muted);">
+            1. Откройте <span style="color:var(--accent)">funpay.com</span> и войдите в аккаунт<br>
+            2. F12 → Application → Cookies → funpay.com<br>
+            3. Скопируйте значение куки <code style="color:var(--accent)">golden_key</code>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /content -->
+</div><!-- /app -->
+
+<div id="toast"></div>
+
+<script src="renderer.js"></script>
+
+<!-- ── Page: Обновления ── -->
+<div class="page" id="page-update">
+  <div class="page-header">
+    <span class="page-title">Обновления</span>
+  </div>
+
+  <!-- Статус подключения к серверу -->
+  <div class="card" id="upd-server-card">
+    <div class="card-title">Сервер обновлений</div>
+    <div id="upd-server-status" style="color:var(--dim);font-size:13px;margin:10px 0">Не настроен</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+      <button class="btn" onclick="go_updateSettings()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">⚙ Настроить</button>
+      <button class="btn" onclick="checkUpdates()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">↻ Проверить</button>
+    </div>
+  </div>
+
+  <!-- Карточка обновления -->
+  <div class="card" id="upd-available-card" style="display:none;border-color:#00e676">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Доступно обновление</div>
+        <div style="font-size:20px;font-weight:800;color:#00e676" id="upd-new-ver">—</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:2px">Текущая: <span id="upd-cur-ver">—</span></div>
+      </div>
+      <button id="upd-apply-btn" onclick="applyUpdate()" class="btn" style="background:#00e676;color:#050d12;font-weight:700;font-size:14px;padding:12px 28px">
+        ⬇ Установить
+      </button>
+    </div>
+    <div id="upd-changelog" style="margin-top:12px;font-size:12px;color:var(--muted);white-space:pre-wrap"></div>
+    <div style="margin-top:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:11px;color:var(--dim)" id="upd-progress-label"></span>
+        <span style="font-size:11px;color:var(--accent)" id="upd-pct"></span>
+      </div>
+      <div style="background:var(--bg3);border-radius:4px;height:6px;overflow:hidden">
+        <div id="upd-bar" style="height:100%;background:var(--accent);width:0%;transition:width .3s;border-radius:4px"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Нет обновлений -->
+  <div class="card" id="upd-latest-card" style="display:none">
+    <div style="text-align:center;padding:24px 0;color:var(--dim)">
+      <div style="font-size:32px;margin-bottom:8px">✓</div>
+      <div style="font-weight:600;color:var(--text)">У вас последняя версия</div>
+      <div style="font-size:12px;margin-top:4px" id="upd-local-ver-label"></div>
+    </div>
+  </div>
+
+  <!-- Настройки подключения -->
+  <div class="card" id="upd-settings-card" style="display:none">
+    <div class="card-title" style="margin-bottom:14px">Настройки сервера обновлений</div>
+    <div class="form-group">
+      <label>URL сервера</label>
+      <input type="text" id="upd-url-input" class="form-inp" placeholder="http://your-vps:9000">
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label>Токен доступа</label>
+      <input type="password" id="upd-token-input" class="form-inp" placeholder="access_token">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-primary" onclick="saveUpdateServer()">Подключить</button>
+      <button class="btn" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)" onclick="document.getElementById('upd-settings-card').style.display='none'">Отмена</button>
+    </div>
+    <div id="upd-connect-result" style="margin-top:10px;font-size:12px;min-height:16px"></div>
+  </div>
+</div>
+
+
+<!-- ══════════════════════════════════════════════════════
+     ONBOARDING SCREEN (показывается до настройки VPS)
+     ════════════════════════════════════════════════════ -->
+<div id="onboarding" style="display:none">
+  <!-- radial glow bg -->
+  <div class="ob-glow"></div>
+
+  <div class="ob-wrap">
+    <!-- Logo -->
+    <div class="ob-logo">
+      <div class="ob-logo-icon">
+        <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+          <rect x="4" y="8" width="24" height="5" rx="2.5" fill="#00e676"/>
+          <rect x="4" y="19" width="24" height="5" rx="2.5" fill="#00e676" opacity=".6"/>
+        </svg>
+      </div>
+    </div>
+    <h1 class="ob-title">Выберите режим работы</h1>
+    <p class="ob-sub">На этом ПК через Docker или на удалённом VPS</p>
+
+    <!-- Mode tabs -->
+    <div class="ob-tabs">
+      <button class="ob-tab active" id="tab-vps" onclick="obSetMode('vps')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 20V10M12 20V4M6 20v-6"/></svg>
+        VPS 24/7
+      </button>
+      <button class="ob-tab" id="tab-docker" onclick="obSetMode('docker')">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 7V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v2"/></svg>
+        Docker
+      </button>
+    </div>
+
+    <!-- VPS mode panel -->
+    <div class="ob-panel" id="ob-vps-panel">
+      <div class="ob-field-label">CONNECTION_TOKEN</div>
+      <div class="ob-input-wrap">
+        <svg class="ob-input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="m19 8-3.09 3.09M19 8l-2-2m2 2h-3m0 0v3"/></svg>
+        <input id="ob-token" type="password" class="ob-input"
+          placeholder="fp_xxxxxxxxxxxxxxxx"
+          onkeydown="if(event.key==='Enter')obConnect()">
+        <button class="ob-eye" onclick="obToggleEye(this)" tabindex="-1">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <div id="ob-vps-host-wrap" style="margin-top:10px">
+        <div class="ob-field-label">VPS HOST (опционально)</div>
+        <input id="ob-host" type="text" class="ob-input" placeholder="91.200.13.244 или auto" value="http://funpaybot.duckdns.org:9000">
+      </div>
+      <div id="ob-error" class="ob-error"></div>
+      <button id="ob-connect-btn" class="ob-btn-primary" onclick="obConnect()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        Подключиться к VPS
+      </button>
+
+      <div class="ob-divider">НЕТ VPS?</div>
+      <p class="ob-hint">Установите worker на свой сервер через Telegram</p>
+      <button class="ob-btn-outline" onclick="obOpenTelegram()">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="#2AABEE"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm4.64 6.8-1.7 8.12c-.13.57-.48.71-.97.44l-2.69-1.98-1.29 1.25c-.14.14-.27.27-.55.27l.2-2.77 5.06-4.58c.22-.2-.05-.3-.34-.1L7.9 14.93 5.26 14.1c-.56-.18-.57-.56.12-.83l9.95-3.85c.47-.17.88.1.31.38z"/></svg>
+        @FunPayPulseBot → /vps
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+      </button>
+      <div class="ob-steps">
+        <div class="ob-step"><span class="ob-step-n">1.</span> Отправьте /vps боту</div>
+        <div class="ob-step"><span class="ob-step-n">2.</span> Установите worker на VPS</div>
+        <div class="ob-step"><span class="ob-step-n">3.</span> Введите полученный токен здесь</div>
+      </div>
+    </div>
+
+    <!-- Docker mode panel -->
+    <div class="ob-panel" id="ob-docker-panel" style="display:none">
+      <p class="ob-hint" style="margin-bottom:16px">Запустите Docker-образ локально и укажите адрес</p>
+      <div class="ob-field-label">DOCKER HOST</div>
+      <input id="ob-docker-host" type="text" class="ob-input" placeholder="http://localhost:8000" style="margin-bottom:12px">
+      <div class="ob-field-label">ACCESS TOKEN</div>
+      <input id="ob-docker-token" type="password" class="ob-input" placeholder="Токен доступа">
+      <div id="ob-docker-error" class="ob-error"></div>
+      <button class="ob-btn-primary" onclick="obConnectDocker()" style="margin-top:14px">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        Подключиться
+      </button>
+      <div class="ob-divider"></div>
+      <p class="ob-hint">Команда для запуска Docker:</p>
+      <div class="ob-code" onclick="obCopyCode(this)">
+        docker run -d -p 8000:8000 --name funpay-worker your-registry/funpay-worker:latest
+        <span class="ob-copy-hint">нажмите чтобы скопировать</span>
+      </div>
+    </div>
+
+    <div class="ob-footer">© 2026 FunPay Bot. All rights reserved.</div>
+  </div>
+</div>
+
+<!-- ══════════════════════════════════════════════════════
+     PAGE: Обновления
+     ════════════════════════════════════════════════════ -->
+<div class="page" id="page-update">
+  <div class="page-header">
+    <span class="page-title">Обновления</span>
+  </div>
+
+  <div class="card" id="upd-server-card">
+    <div class="card-title">Сервер</div>
+    <div id="upd-server-status" style="color:var(--dim);font-size:13px;margin:10px 0">Не настроен</div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+      <button class="btn" onclick="checkUpdates()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">↻ Проверить</button>
+      <button class="btn" onclick="document.getElementById('upd-settings-card').style.display=''" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">⚙ Настроить</button>
+    </div>
+  </div>
+
+  <div class="card" id="upd-available-card" style="display:none;border-color:#00e676;margin-top:12px">
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+      <div>
+        <div style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Доступно обновление</div>
+        <div style="font-size:22px;font-weight:800;color:#00e676" id="upd-new-ver">—</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:2px">Текущая: <span id="upd-cur-ver">—</span></div>
+      </div>
+      <button id="upd-apply-btn" onclick="applyUpdate()" class="btn"
+        style="background:#00e676;color:#050d12;font-weight:700;font-size:14px;padding:12px 28px">
+        ⬇ Установить
+      </button>
+    </div>
+    <div id="upd-changelog" style="margin-top:12px;font-size:12px;color:var(--muted);white-space:pre-wrap"></div>
+    <div style="margin-top:14px">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+        <span style="font-size:11px;color:var(--dim)" id="upd-progress-label"></span>
+        <span style="font-size:11px;color:var(--accent)" id="upd-pct"></span>
+      </div>
+      <div style="background:var(--bg3);border-radius:4px;height:6px;overflow:hidden">
+        <div id="upd-bar" style="height:100%;background:var(--accent);width:0%;transition:width .3s;border-radius:4px"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card" id="upd-latest-card" style="display:none;margin-top:12px">
+    <div style="text-align:center;padding:24px 0;color:var(--dim)">
+      <div style="font-size:32px;margin-bottom:8px">✓</div>
+      <div style="font-weight:600;color:var(--text)">У вас последняя версия</div>
+      <div style="font-size:12px;margin-top:4px" id="upd-local-ver-label"></div>
+    </div>
+  </div>
+
+  <div class="card" id="upd-settings-card" style="display:none;margin-top:12px">
+    <div class="card-title" style="margin-bottom:14px">Настройки сервера обновлений</div>
+    <div class="form-group">
+      <label>URL сервера</label>
+      <input type="text" id="upd-url-input" class="form-inp" placeholder="http://your-vps:9000">
+    </div>
+    <div class="form-group" style="margin-top:10px">
+      <label>Токен доступа</label>
+      <input type="password" id="upd-token-input" class="form-inp" placeholder="access_token">
+    </div>
+    <div style="display:flex;gap:8px;margin-top:14px">
+      <button class="btn btn-primary" onclick="saveUpdateServer()">Подключить</button>
+      <button class="btn" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)"
+        onclick="document.getElementById('upd-settings-card').style.display='none'">Отмена</button>
+    </div>
+    <div id="upd-connect-result" style="margin-top:10px;font-size:12px;min-height:16px"></div>
+  </div>
+</div>
+
+</body>
+</html>
