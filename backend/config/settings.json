@@ -1,1 +1,23 @@
-
+{
+  "golden_key": "",
+  "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+  "auto_response": {
+    "enabled": false,
+    "triggers": []
+  },
+  "auto_raise": {
+    "enabled": false,
+    "interval_minutes": 60,
+    "categories": []
+  },
+  "auto_review": {
+    "enabled": false,
+    "text": "Спасибо за покупку!",
+    "rating": 5
+  },
+  "greeting": {
+    "enabled": false,
+    "text": "Привет! Чем могу помочь?",
+    "cooldown_hours": 24
+  }
+}
