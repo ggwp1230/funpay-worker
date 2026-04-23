@@ -265,9 +265,15 @@ class FunPayBot:
                 user_agent=cfg.get("user_agent") or None,
             )
             self.account.get()
+
+            if not self.account.is_initiated:
+                raise RuntimeError("Аккаунт не инициализирован после get()")
+
+            bal = self.account.total_balance if self.account.total_balance is not None else 0
+            currency = self.account.currency.value if self.account.currency else ""
             self.log.add("info", "client",
                 f"Аккаунт подключён: {self.account.username} | "
-                f"Баланс: {self.account.total_balance} {self.account.currency.value if self.account.currency else ''} | "
+                f"Баланс: {bal} {currency} | "
                 f"Продаж: {self.account.active_sales or 0} | "
                 f"Покупок: {self.account.active_purchases or 0}")
             return True, f"Подключён как {self.account.username}"
@@ -314,6 +320,9 @@ class FunPayBot:
                 self.account.get()
             else:
                 self.log.add("info", "client", "Используем уже подключённый аккаунт...")
+
+            if not self.account.is_initiated:
+                raise RuntimeError("Аккаунт не инициализирован — проверьте golden_key")
 
             bal = self.account.total_balance if self.account.total_balance is not None else 0
             self.log.add("info", "client",
