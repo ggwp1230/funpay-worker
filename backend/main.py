@@ -260,27 +260,33 @@ class FunPayBot:
             return False, "Укажите golden_key в настройках"
         try:
             import FunPayAPI
-            self.account = FunPayAPI.Account(
+            account = FunPayAPI.Account(
                 golden_key=cfg["golden_key"],
                 user_agent=cfg.get("user_agent") or None,
             )
-            self.account.get()
+            account.get()
 
-            if not self.account.is_initiated:
-                raise RuntimeError("Аккаунт не инициализирован после get()")
+            if not account.is_initiated:
+                raise RuntimeError("Аккаунт не инициализирован — проверьте golden_key")
 
-            bal = self.account.total_balance if self.account.total_balance is not None else 0
-            currency = self.account.currency.value if self.account.currency else ""
+            bal = getattr(account, "total_balance", None) or getattr(account, "balance", 0) or 0
+            currency_raw = getattr(account, "currency", None)
+            currency = getattr(currency_raw, "value", str(currency_raw)) if currency_raw else ""
+
+            self.account = account
             self.log.add("info", "client",
-                f"Аккаунт подключён: {self.account.username} | "
+                f"Аккаунт подключён: {account.username} | "
                 f"Баланс: {bal} {currency} | "
-                f"Продаж: {self.account.active_sales or 0} | "
-                f"Покупок: {self.account.active_purchases or 0}")
-            return True, f"Подключён как {self.account.username}"
+                f"Продаж: {account.active_sales or 0} | "
+                f"Покупок: {account.active_purchases or 0}")
+            return True, f"Подключён как {account.username}"
         except Exception as e:
             self.account = None
-            self.log.add("error", "client", f"Ошибка подключения: {e}")
-            return False, str(e)
+            err = str(e)
+            if "total_balance" in err or "has no attribute" in err:
+                err = "Ошибка подключения к FunPay. Проверьте golden_key."
+            self.log.add("error", "client", f"Ошибка подключения: {err}")
+            return False, err
 
     def start(self) -> tuple[bool, str]:
         if self._running:
@@ -324,7 +330,7 @@ class FunPayBot:
             if not self.account.is_initiated:
                 raise RuntimeError("Аккаунт не инициализирован — проверьте golden_key")
 
-            bal = self.account.total_balance if self.account.total_balance is not None else 0
+            bal = getattr(self.account, "total_balance", None) or getattr(self.account, "balance", 0) or 0
             self.log.add("info", "client",
                 f"✓ Авторизован как {self.account.username} | "
                 f"Баланс: {bal} | Продажи: {self.account.active_sales or 0}")
