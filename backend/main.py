@@ -19,10 +19,33 @@ except ImportError:
 
 import json
 import logging
+import base64
+import hashlib
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
+
+# ─── Key protection ───────────────────────────────────────────────────────────
+_KEY_SALT = "FunPayPulse_2025"
+
+def _obfuscate_key(key: str) -> str:
+    """Простая обфускация ключа перед сохранением на диск."""
+    if not key or key.startswith("enc:"):
+        return key
+    encoded = base64.b64encode(key.encode()).decode()
+    return f"enc:{encoded}"
+
+def _deobfuscate_key(key: str) -> str:
+    """Восстанавливает ключ при чтении."""
+    if not key:
+        return key
+    if key.startswith("enc:"):
+        try:
+            return base64.b64decode(key[4:]).decode()
+        except Exception:
+            return key
+    return key
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -75,14 +98,22 @@ def load_config() -> dict:
         try:
             with open(CONFIG_PATH, encoding="utf-8") as f:
                 data = json.load(f)
-            return _deep_merge(DEFAULT_CONFIG, data)
+            merged = _deep_merge(DEFAULT_CONFIG, data)
+            # Деобфусцируем golden_key при чтении
+            if merged.get("golden_key"):
+                merged["golden_key"] = _deobfuscate_key(merged["golden_key"])
+            return merged
         except Exception:
             pass
     return dict(DEFAULT_CONFIG)
 
 def save_config(data: dict):
+    save_data = dict(data)
+    # Обфусцируем golden_key перед записью на диск
+    if save_data.get("golden_key"):
+        save_data["golden_key"] = _obfuscate_key(save_data["golden_key"])
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(save_data, f, ensure_ascii=False, indent=2)
 
 # ─── Event Log ──────────────────────────────────────────────────────────────
 class EventLog:
@@ -205,6 +236,9 @@ class FunPayBot:
         self._update_meta: dict = {}
         self._update_progress: dict = {}
         self._update_available: bool = False
+        # Кулдаун авто-ответов: chat_id → timestamp последнего ответа
+        self._response_cooldowns: Dict[int, float] = {}
+        self._RESPONSE_COOLDOWN = 60  # секунд между авто-ответами в одном чате
 
     @property
     def status(self) -> str:
@@ -294,7 +328,7 @@ class FunPayBot:
         cfg = load_config()
         if not cfg.get("golden_key"):
             return False, "Укажите golden_key в настройках"
-        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread = threading.Thread(target=self._loop_with_restart, daemon=True)
         self._thread.start()
         return True, "Бот запускается..."
 
@@ -309,6 +343,41 @@ class FunPayBot:
         self.stats.reset()
         self._next_raise_at = None
         self.log.add("info", "system", "Бот остановлен")
+
+    def _loop_with_restart(self):
+        """Обёртка над _loop с авто-рестартом при сетевых ошибках."""
+        RESTART_DELAY = 30  # секунд до перезапуска
+        MAX_RESTARTS  = 10  # максимум перезапусков подряд
+        restarts = 0
+
+        while restarts < MAX_RESTARTS:
+            self._loop()
+            # Если бот остановлен вручную — не перезапускаем
+            if self._status == "stopped":
+                break
+            # Если ошибка авторизации — не перезапускаем
+            if self._status == "error" and restarts == 0:
+                # Проверяем тип ошибки через лог
+                recent = self.log.get_all("client")
+                last_errors = [e for e in recent[-5:] if e["level"] == "error"]
+                if any("golden_key" in e["message"] or "авторизац" in e["message"].lower()
+                       for e in last_errors):
+                    self.log.add("error", "client", "Авторизация провалена — авто-рестарт отключён")
+                    break
+
+            restarts += 1
+            self.log.add("warning", "client",
+                f"Бот упал. Перезапуск через {RESTART_DELAY}с... (попытка {restarts}/{MAX_RESTARTS})")
+            # Ждём перед рестартом (прерываемое ожидание)
+            for _ in range(RESTART_DELAY):
+                if self._status == "stopped":
+                    return
+                time.sleep(1)
+
+        if restarts >= MAX_RESTARTS:
+            self.log.add("error", "client",
+                f"Превышено максимальное количество перезапусков ({MAX_RESTARTS}). Остановлен.")
+            self._status = "error"
 
     def _loop(self):
         self._status = "connecting"
@@ -417,6 +486,17 @@ class FunPayBot:
     def _auto_response(self, msg, cfg):
         triggers = cfg.get("auto_response", {}).get("triggers", [])
         text_lower = (msg.text or "").lower()
+        chat_id = msg.chat_id
+
+        # Проверяем кулдаун — не спамим в один чат
+        now = time.time()
+        last_response = self._response_cooldowns.get(chat_id, 0)
+        if now - last_response < self._RESPONSE_COOLDOWN:
+            remaining = int(self._RESPONSE_COOLDOWN - (now - last_response))
+            self.log.add("debug", "auto_response",
+                f"Кулдаун чата {msg.chat_name}: ещё {remaining}с")
+            return
+
         for trigger in triggers:
             for kw in trigger.get("keywords", []):
                 if kw.lower() in text_lower:
@@ -425,12 +505,18 @@ class FunPayBot:
                         continue
                     try:
                         self.account.send_message(
-                            chat_id=msg.chat_id,
+                            chat_id=chat_id,
                             text=resp,
                             chat_name=msg.chat_name,
                             interlocutor_id=msg.author_id,
                         )
                         self.stats.inc("messages_sent")
+                        self._response_cooldowns[chat_id] = time.time()
+                        # Чистим старые записи (старше 1 часа)
+                        cutoff = time.time() - 3600
+                        self._response_cooldowns = {
+                            k: v for k, v in self._response_cooldowns.items() if v > cutoff
+                        }
                         self.log.add("info", "auto_response",
                             f"↩ Авто-ответ → {msg.chat_name} (триггер: «{kw}»)")
                     except Exception as e:
