@@ -492,3 +492,14 @@ input[type=time] {
   font-size: 12px; width: 100%; outline: none;
 }
 input[type=time]:focus { border-color: var(--accent); }
+
+/* ── Logout button ── */
+.btn-logout {
+  display: flex; align-items: center; gap: 6px;
+  width: 100%; padding: 6px 10px; margin-top: 8px;
+  background: transparent; border: 1px solid var(--border2);
+  border-radius: 6px; color: var(--dim); font-family: inherit;
+  font-size: 11px; cursor: pointer; transition: .15s;
+  -webkit-app-region: no-drag;
+}
+.btn-logout:hover { border-color: var(--red); color: var(--red); background: rgba(248,81,73,.08); }

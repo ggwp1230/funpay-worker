@@ -627,6 +627,21 @@ function showOnboarding() {
   setTimeout(() => document.getElementById('ob-token').focus(), 300);
 }
 
+// ─── Logout ──────────────────────────────────────────────────────────────────
+async function logout() {
+  if (!confirm('Выйти? Токен будет удалён, потребуется войти заново.')) return;
+  // Останавливаем бота
+  await api('/api/stop', { method: 'POST' });
+  // Очищаем localStorage
+  localStorage.removeItem('ob_token');
+  localStorage.removeItem('ob_mode');
+  localStorage.removeItem('ob_host');
+  // Показываем экран входа
+  document.getElementById('onboarding').style.display = 'flex';
+  setTimeout(() => document.getElementById('ob-token').focus(), 300);
+  toast('Вы вышли. Введите новый токен.', '');
+}
+
 // ─── Update page logic ────────────────────────────────────────────────────────
 
 async function checkUpdates() {
