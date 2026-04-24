@@ -42,7 +42,7 @@ echo -e "  ${GREEN}Docker ${DOCKER_VER}${RESET}"
 echo -e "${LINE}"
 
 # ── Получение кода через API (или ввод вручную) ───────────────────────────────
-echo -e "\n${BOLD}   Получите код через бота @FunPayPulseBot (команда /vps)${RESET}"
+echo -e "\n${BOLD}   Получите код через бота @FPNexusBot (команда /vps)${RESET}"
 echo -e "${LINE}"
 
 while true; do

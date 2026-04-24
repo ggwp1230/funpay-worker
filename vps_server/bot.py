@@ -1,5 +1,5 @@
 """
-FunPay Pulse — Telegram Bot
+FP Nexus — Telegram Bot
 Выдаёт OTP коды для установки воркера на VPS
 """
 import os
@@ -51,7 +51,7 @@ def cleanup_otps():
 # ── Handlers ──────────────────────────────────────────────────────────────────
 async def cmd_start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "👋 Привет! Я бот FunPay Pulse.\n\n"
+        "👋 Привет! Я бот FP Nexus.\n\n"
         "Команды:\n"
         "/vps — получить код для установки воркера\n"
         "/help — помощь"
