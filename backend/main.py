@@ -27,25 +27,13 @@ from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
 # ─── Key protection ───────────────────────────────────────────────────────────
-_KEY_SALT = "FunPayPulse_2025"
+# golden_key хранится в Electron safeStorage (Windows DPAPI / macOS Keychain)
+# и передаётся в бэкенд через переменную окружения FUNPAY_GOLDEN_KEY.
+# В settings.json ключ НЕ сохраняется — это намеренно.
 
-def _obfuscate_key(key: str) -> str:
-    """Простая обфускация ключа перед сохранением на диск."""
-    if not key or key.startswith("enc:"):
-        return key
-    encoded = base64.b64encode(key.encode()).decode()
-    return f"enc:{encoded}"
-
-def _deobfuscate_key(key: str) -> str:
-    """Восстанавливает ключ при чтении."""
-    if not key:
-        return key
-    if key.startswith("enc:"):
-        try:
-            return base64.b64decode(key[4:]).decode()
-        except Exception:
-            return key
-    return key
+def get_secure_golden_key() -> str:
+    """Получает golden_key из env (установлен Electron при запуске)."""
+    return os.environ.get("FUNPAY_GOLDEN_KEY", "").strip()
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -109,9 +97,8 @@ def load_config() -> dict:
             with open(CONFIG_PATH, encoding="utf-8") as f:
                 data = json.load(f)
             merged = _deep_merge(DEFAULT_CONFIG, data)
-            # Деобфусцируем golden_key при чтении
-            if merged.get("golden_key"):
-                merged["golden_key"] = _deobfuscate_key(merged["golden_key"])
+            # golden_key читается из env (Electron safeStorage), не из файла
+            merged["golden_key"] = get_secure_golden_key()
             return merged
         except Exception:
             pass
@@ -119,9 +106,8 @@ def load_config() -> dict:
 
 def save_config(data: dict):
     save_data = dict(data)
-    # Обфусцируем golden_key перед записью на диск
-    if save_data.get("golden_key"):
-        save_data["golden_key"] = _obfuscate_key(save_data["golden_key"])
+    # НЕ сохраняем golden_key в файл — он хранится в Electron safeStorage
+    save_data.pop("golden_key", None)
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(save_data, f, ensure_ascii=False, indent=2)
 
@@ -1026,6 +1012,13 @@ def get_categories():
 @app.get("/api/ping")
 def ping():
     return {"pong": True, "time": datetime.now().isoformat()}
+
+
+@app.get("/api/key/status")
+def key_status():
+    """Проверяет есть ли golden_key в окружении."""
+    key = get_secure_golden_key()
+    return {"has_key": bool(key)}
 
 
 @app.get("/api/earnings")
