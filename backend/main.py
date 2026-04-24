@@ -1,5 +1,5 @@
 """
-FunPay Bot — FastAPI Backend
+FP Nexus — FastAPI Backend
 Запускается автоматически из Electron или вручную через start.bat
 """
 from __future__ import annotations
@@ -51,7 +51,7 @@ logging.basicConfig(
         logging.StreamHandler(sys.stdout),
     ]
 )
-logger = logging.getLogger("FunPayBot")
+logger = logging.getLogger("FPNexus")
 
 # ─── Config ─────────────────────────────────────────────────────────────────
 CONFIG_PATH = Path(__file__).parent / "config" / "settings.json"
@@ -318,7 +318,7 @@ class BotStats:
 
 
 # ─── Bot Core ────────────────────────────────────────────────────────────────
-class FunPayBot:
+class FPNexus:
     def __init__(self):
         self.log = EventLog()
         self.stats = BotStats()
@@ -887,7 +887,7 @@ class FunPayBot:
 
 
 # ─── App ─────────────────────────────────────────────────────────────────────
-bot = FunPayBot()
+bot = FPNexus()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -897,7 +897,7 @@ async def lifespan(app: FastAPI):
     yield
     bot.stop()
 
-app = FastAPI(title="FunPay Bot API", lifespan=lifespan)
+app = FastAPI(title="FP Nexus API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
@@ -1029,7 +1029,7 @@ def get_earnings():
 @app.post("/api/notify/test")
 async def test_notify():
     cfg = load_config()
-    await tg_notify("✅ FunPay Bot — тестовое уведомление работает!", cfg)
+    await tg_notify("✅ FP Nexus — тестовое уведомление работает!", cfg)
     return {"ok": True, "message": "Уведомление отправлено"}
 
 
