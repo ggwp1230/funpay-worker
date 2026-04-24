@@ -11,6 +11,15 @@ contextBridge.exposeInMainWorld('electron', {
   backendUrl:      () => ipcRenderer.invoke('backend-url'),
   backendReady:    () => ipcRenderer.invoke('backend-ready'),
 
+  // Безопасное хранение golden_key
+  keySave:         (key) => ipcRenderer.invoke('key-save', key),
+  keyLoad:         ()    => ipcRenderer.invoke('key-load'),
+  keyDelete:       ()    => ipcRenderer.invoke('key-delete'),
+  keyExists:       ()    => ipcRenderer.invoke('key-exists'),
+
+  // Перезапуск бэкенда
+  backendRestart:  ()    => ipcRenderer.invoke('backend-restart'),
+
   onBackendStatus: (cb) => ipcRenderer.on('backend-status', (_, v) => cb(v)),
   onPyLog:         (cb) => ipcRenderer.on('py-log', (_, v) => cb(v)),
 });

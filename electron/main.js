@@ -1,6 +1,6 @@
 'use strict';
 
-const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, safeStorage } = require('electron');
 const path    = require('path');
 const { spawn, execSync, spawnSync } = require('child_process');
 const http    = require('http');
@@ -17,6 +17,48 @@ const IS_PACKAGED = app.isPackaged;
 const BACKEND = IS_PACKAGED
   ? path.join(process.resourcesPath, 'backend')
   : path.join(__dirname, '..', 'backend');
+
+// ──────────────────────────────────────────────────
+// Secure key storage (Electron safeStorage → DPAPI/Keychain)
+// ──────────────────────────────────────────────────
+const KEY_FILE = path.join(app.getPath('userData'), 'secure_key.bin');
+const fs2 = require('fs');
+
+function saveGoldenKey(key) {
+  try {
+    if (!safeStorage.isEncryptionAvailable()) {
+      // Fallback: просто сохраняем (лучше чем ничего)
+      fs2.writeFileSync(KEY_FILE, key, 'utf8');
+      return;
+    }
+    const encrypted = safeStorage.encryptString(key);
+    fs2.writeFileSync(KEY_FILE, encrypted);
+    console.log('[Electron] Golden key saved securely (safeStorage)');
+  } catch (e) {
+    console.error('[Electron] Failed to save key:', e.message);
+  }
+}
+
+function loadGoldenKey() {
+  try {
+    if (!fs2.existsSync(KEY_FILE)) return '';
+    const data = fs2.readFileSync(KEY_FILE);
+    if (!safeStorage.isEncryptionAvailable()) {
+      return data.toString('utf8');
+    }
+    return safeStorage.decryptString(data);
+  } catch (e) {
+    console.error('[Electron] Failed to load key:', e.message);
+    return '';
+  }
+}
+
+function deleteGoldenKey() {
+  try {
+    if (fs2.existsSync(KEY_FILE)) fs2.unlinkSync(KEY_FILE);
+    console.log('[Electron] Golden key deleted');
+  } catch (e) {}
+}
 
 // ──────────────────────────────────────────────────
 // State
@@ -133,10 +175,17 @@ async function startBackend() {
     return;
   }
 
+  // Загружаем golden_key из защищённого хранилища
+  const secureKey = loadGoldenKey();
+
   pyProc = spawn(python, [script], {
     cwd: BACKEND,
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
+    env: {
+      ...process.env,
+      FUNPAY_GOLDEN_KEY: secureKey,  // передаём ключ через env, не через файл
+    },
   });
 
   pyProc.stdout.on('data', d => {
@@ -253,6 +302,26 @@ ipcMain.handle('app-version', () => app.getVersion());
 ipcMain.handle('open-logs-folder', () => shell.openPath(path.join(BACKEND, 'logs')));
 ipcMain.handle('backend-url',   () => API_URL);
 ipcMain.handle('backend-ready', () => backendReady);
+
+// Безопасное хранение golden_key
+ipcMain.handle('key-save',   (_, key) => { saveGoldenKey(key); return true; });
+ipcMain.handle('key-load',   ()       => loadGoldenKey());
+ipcMain.handle('key-delete', ()       => { deleteGoldenKey(); return true; });
+ipcMain.handle('key-exists', ()       => fs2.existsSync(KEY_FILE));
+
+// Перезапуск бэкенда с новым ключом
+ipcMain.handle('backend-restart', async () => {
+  stopBackend();
+  await new Promise(r => setTimeout(r, 1000));
+  await startBackend();
+  try {
+    await waitForBackend(30, 500);
+    mainWindow?.webContents.send('backend-status', { ready: true });
+  } catch (e) {
+    mainWindow?.webContents.send('backend-status', { ready: false, error: e.message });
+  }
+  return true;
+});
 
 // ──────────────────────────────────────────────────
 // App lifecycle
