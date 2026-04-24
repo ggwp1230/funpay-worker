@@ -777,3 +777,102 @@ electron.onBackendStatus(({ ready, error }) => {
   // FIX: поллинг каждые 8 секунд вместо 2
   _statusInterval = setInterval(updateStatus, 5000);
 })();
+
+// ─── Blacklist ────────────────────────────────────────────────────────────────
+async function loadBlacklist() {
+  const d = await api('/api/config');
+  const bl = d?.blacklist || {};
+  document.getElementById('bl-on').checked = !!bl.enabled;
+  document.getElementById('bl-ids').value   = (bl.user_ids   || []).join(', ');
+  document.getElementById('bl-names').value = (bl.usernames  || []).join(', ');
+}
+
+async function saveBlacklist() {
+  const ids   = document.getElementById('bl-ids').value.split(',')
+    .map(s => s.trim()).filter(Boolean).map(Number).filter(Boolean);
+  const names = document.getElementById('bl-names').value.split(',')
+    .map(s => s.trim()).filter(Boolean);
+  const d = await apiPost('/api/config', { data: {
+    'blacklist.enabled':   document.getElementById('bl-on').checked,
+    'blacklist.user_ids':  ids,
+    'blacklist.usernames': names,
+  }});
+  toast(d.message, d.ok ? 'ok' : 'err');
+}
+
+// ─── Telegram notifications ───────────────────────────────────────────────────
+async function loadTgNotify() {
+  const d = await api('/api/config');
+  const tg = d?.telegram_notify || {};
+  document.getElementById('tg-on').checked = !!tg.enabled;
+  document.getElementById('tg-token').value = '';
+  document.getElementById('tg-chat').value  = tg.chat_id || '';
+  const ar = d?.auto_raise || {};
+  document.getElementById('sch-on').checked   = !!ar.schedule_enabled;
+  document.getElementById('sch-from').value   = ar.schedule_from || '09:00';
+  document.getElementById('sch-to').value     = ar.schedule_to   || '23:00';
+}
+
+async function saveTgNotify() {
+  const patch = {
+    'telegram_notify.enabled': document.getElementById('tg-on').checked,
+    'telegram_notify.chat_id': document.getElementById('tg-chat').value.trim(),
+  };
+  const tok = document.getElementById('tg-token').value.trim();
+  if (tok) patch['telegram_notify.bot_token'] = tok;
+  const d = await apiPost('/api/config', { data: patch });
+  toast(d.message, d.ok ? 'ok' : 'err');
+}
+
+async function testTgNotify() {
+  const d = await api('/api/notify/test', { method: 'POST' });
+  toast(d?.message || (d?.ok ? 'Отправлено!' : 'Ошибка'), d?.ok ? 'ok' : 'err');
+}
+
+async function saveSchedule() {
+  const d = await apiPost('/api/config', { data: {
+    'auto_raise.schedule_enabled': document.getElementById('sch-on').checked,
+    'auto_raise.schedule_from':    document.getElementById('sch-from').value,
+    'auto_raise.schedule_to':      document.getElementById('sch-to').value,
+  }});
+  toast(d.message, d.ok ? 'ok' : 'err');
+}
+
+// ─── Backups ──────────────────────────────────────────────────────────────────
+async function loadBackups() {
+  const d = await api('/api/backups');
+  const list = document.getElementById('backup-list');
+  const backups = d?.backups || [];
+  if (!backups.length) {
+    list.innerHTML = '<div class="text-dim">Нет бэкапов</div>';
+    return;
+  }
+  list.innerHTML = backups.map(b => `
+    <div class="backup-row">
+      <span class="backup-name">${esc(b)}</span>
+      <button class="btn btn-sm btn-danger" onclick="restoreBackup('${esc(b)}')">↩ Восстановить</button>
+    </div>
+  `).join('');
+}
+
+async function createBackupNow() {
+  const d = await apiPost('/api/backups/create', {});
+  toast(d?.message || 'Бэкап создан', d?.ok ? 'ok' : 'err');
+  loadBackups();
+}
+
+async function restoreBackup(filename) {
+  if (!confirm(`Восстановить из ${filename}? Текущие настройки будут перезаписаны.`)) return;
+  const d = await apiPost('/api/backups/restore', { filename });
+  toast(d?.message || 'Восстановлено', d?.ok ? 'ok' : 'err');
+  if (d?.ok) loadSettings();
+}
+
+// ─── Patch go() to load data for new pages ───────────────────────────────────
+const _origGo = go;
+window.go = function(page) {
+  _origGo(page);
+  if (page === 'blacklist') loadBlacklist();
+  if (page === 'notify')    loadTgNotify();
+  if (page === 'backup')    loadBackups();
+};

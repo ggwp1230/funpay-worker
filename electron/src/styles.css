@@ -476,3 +476,19 @@ textarea { resize:vertical; min-height:72px; }
 
 @keyframes spin { to { transform: rotate(360deg); } }
 
+
+/* ── Backup rows ── */
+.backup-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 9px 12px; background: var(--bg3);
+  border: 1px solid var(--border); border-radius: 7px; margin-bottom: 6px;
+}
+.backup-name { font-size: 12px; color: var(--muted); font-family: 'JetBrains Mono', monospace; }
+
+/* ── time input ── */
+input[type=time] {
+  background: var(--bg3); border: 1px solid var(--border2); color: var(--text);
+  padding: 7px 11px; border-radius: 6px; font-family: 'JetBrains Mono', monospace;
+  font-size: 12px; width: 100%; outline: none;
+}
+input[type=time]:focus { border-color: var(--accent); }

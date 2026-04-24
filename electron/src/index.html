@@ -67,6 +67,15 @@
     <div class="nav-item" id="nav-settings" onclick="go('settings')">
       <span class="nav-icon">⊙</span> Настройки
     </div>
+    <div class="nav-item" id="nav-blacklist" onclick="go('blacklist')">
+      <span class="nav-icon">🚫</span> Чёрный список
+    </div>
+    <div class="nav-item" id="nav-notify" onclick="go('notify')">
+      <span class="nav-icon">🔔</span> Уведомления
+    </div>
+    <div class="nav-item" id="nav-backup" onclick="go('backup')">
+      <span class="nav-icon">💾</span> Бэкапы
+    </div>
 
     <div class="nav-item" id="nav-update" onclick="go('update')">
       <span class="nav-icon" id="update-nav-icon">↑</span> Обновления
@@ -328,6 +337,111 @@
             2. F12 → Application → Cookies → funpay.com<br>
             3. Скопируйте значение куки <code style="color:var(--accent)">golden_key</code>
           </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- BLACKLIST -->
+    <div class="page" id="page-blacklist">
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">🚫 Чёрный список</div>
+          <label class="toggle">
+            <input type="checkbox" id="bl-on" onchange="patchCfg({'blacklist.enabled':this.checked})">
+            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            <span class="toggle-lbl">Включено</span>
+          </label>
+        </div>
+        <p class="text-dim" style="margin-bottom:14px">Сообщения от этих пользователей будут игнорироваться.</p>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>ID пользователей (через запятую)</label>
+            <input type="text" id="bl-ids" placeholder="12345678, 87654321" />
+            <div class="input-hint">Telegram/FunPay user ID</div>
+          </div>
+          <div class="form-group">
+            <label>Имена пользователей (через запятую)</label>
+            <input type="text" id="bl-names" placeholder="user1, user2" />
+          </div>
+        </div>
+        <div style="margin-top:14px">
+          <button class="btn btn-primary" onclick="saveBlacklist()">💾 Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- NOTIFICATIONS -->
+    <div class="page" id="page-notify">
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">🔔 Telegram уведомления</div>
+          <label class="toggle">
+            <input type="checkbox" id="tg-on">
+            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            <span class="toggle-lbl">Включено</span>
+          </label>
+        </div>
+        <p class="text-dim" style="margin-bottom:14px">Дублировать уведомления о заказах в Telegram.</p>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>Bot Token</label>
+            <input type="password" id="tg-token" placeholder="1234567890:AAH..." />
+          </div>
+          <div class="form-group">
+            <label>Chat ID (ваш Telegram ID)</label>
+            <input type="text" id="tg-chat" placeholder="123456789" />
+            <div class="input-hint">Узнайте у @userinfobot</div>
+          </div>
+        </div>
+        <div style="margin-top:14px;display:flex;gap:8px">
+          <button class="btn btn-primary" onclick="saveTgNotify()">💾 Сохранить</button>
+          <button class="btn" onclick="testTgNotify()">📨 Тест</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">⏰ Расписание поднятия</div>
+          <label class="toggle">
+            <input type="checkbox" id="sch-on">
+            <div class="toggle-track"><div class="toggle-thumb"></div></div>
+            <span class="toggle-lbl">Включено</span>
+          </label>
+        </div>
+        <p class="text-dim" style="margin-bottom:14px">Поднимать лоты только в указанные часы.</p>
+        <div class="form-grid">
+          <div class="form-group">
+            <label>С (HH:MM)</label>
+            <input type="time" id="sch-from" value="09:00" />
+          </div>
+          <div class="form-group">
+            <label>До (HH:MM)</label>
+            <input type="time" id="sch-to" value="23:00" />
+          </div>
+        </div>
+        <div style="margin-top:14px">
+          <button class="btn btn-primary" onclick="saveSchedule()">💾 Сохранить</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- BACKUP -->
+    <div class="page" id="page-backup">
+      <div class="card">
+        <div class="card-hd">
+          <div class="card-title">💾 Бэкапы настроек</div>
+        </div>
+        <p class="text-dim" style="margin-bottom:14px">
+          Бэкап создаётся автоматически при каждом сохранении настроек.
+          Хранятся последние 5 файлов.
+        </p>
+        <div style="display:flex;gap:8px;margin-bottom:14px">
+          <button class="btn btn-primary" onclick="loadBackups()">↻ Обновить список</button>
+          <button class="btn" onclick="createBackupNow()">+ Создать сейчас</button>
+        </div>
+        <div id="backup-list">
+          <div class="text-dim">Загрузите список бэкапов...</div>
         </div>
       </div>
     </div>
