@@ -73,9 +73,19 @@ DEFAULT_CONFIG = {
     "golden_key": "",
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "auto_response": {"enabled": False, "triggers": []},
-    "auto_raise": {"enabled": False, "interval_minutes": 60, "categories": []},
+    "auto_raise": {
+        "enabled": False,
+        "interval_minutes": 60,
+        "categories": [],
+        "schedule_enabled": False,
+        "schedule_from": "09:00",
+        "schedule_to": "23:00",
+    },
     "auto_review": {"enabled": False, "text": "Спасибо за покупку!", "rating": 5},
     "greeting": {"enabled": False, "text": "Привет! Чем могу помочь?", "cooldown_hours": 24},
+    "blacklist": {"enabled": False, "user_ids": [], "usernames": []},
+    "telegram_notify": {"enabled": False, "bot_token": "", "chat_id": ""},
+    "backup": {"enabled": True, "keep_last": 5},
     "update_server": {
         "url": "",
         "token": "",
@@ -114,6 +124,76 @@ def save_config(data: dict):
         save_data["golden_key"] = _obfuscate_key(save_data["golden_key"])
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(save_data, f, ensure_ascii=False, indent=2)
+
+# ─── Backup ──────────────────────────────────────────────────────────────────
+BACKUP_DIR = Path(__file__).parent / "config" / "backups"
+
+def backup_config():
+    """Создаёт бэкап settings.json с датой в имени."""
+    if not CONFIG_PATH.exists():
+        return
+    try:
+        BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        dst = BACKUP_DIR / f"settings_{ts}.json"
+        shutil.copy2(CONFIG_PATH, dst)
+        # Удаляем старые бэкапы
+        cfg = load_config()
+        keep = cfg.get("backup", {}).get("keep_last", 5)
+        backups = sorted(BACKUP_DIR.glob("settings_*.json"))
+        for old in backups[:-keep]:
+            old.unlink(missing_ok=True)
+    except Exception as e:
+        logger.warning(f"Backup failed: {e}")
+
+def list_backups() -> list:
+    if not BACKUP_DIR.exists():
+        return []
+    return sorted([f.name for f in BACKUP_DIR.glob("settings_*.json")], reverse=True)
+
+def restore_backup(filename: str) -> bool:
+    src = BACKUP_DIR / filename
+    if not src.exists():
+        return False
+    shutil.copy2(src, CONFIG_PATH)
+    return True
+
+
+# ─── Telegram notify ──────────────────────────────────────────────────────────
+async def tg_notify(text: str, cfg: dict):
+    """Отправляет уведомление в Telegram."""
+    tg_cfg = cfg.get("telegram_notify", {})
+    if not tg_cfg.get("enabled"):
+        return
+    token   = tg_cfg.get("bot_token", "").strip()
+    chat_id = tg_cfg.get("chat_id", "").strip()
+    if not token or not chat_id:
+        return
+    try:
+        import urllib.request
+        url  = f"https://api.telegram.org/bot{token}/sendMessage"
+        data = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "HTML"}).encode()
+        req  = urllib.request.Request(url, data=data,
+               headers={"Content-Type": "application/json"}, method="POST")
+        urllib.request.urlopen(req, timeout=5)
+    except Exception as e:
+        logger.debug(f"TG notify error: {e}")
+
+
+# ─── Schedule check ───────────────────────────────────────────────────────────
+def is_raise_scheduled(cfg: dict) -> bool:
+    """Проверяет разрешено ли поднятие по расписанию прямо сейчас."""
+    ar = cfg.get("auto_raise", {})
+    if not ar.get("schedule_enabled"):
+        return True  # расписание выключено — всегда разрешено
+    try:
+        now_str  = datetime.now().strftime("%H:%M")
+        from_str = ar.get("schedule_from", "00:00")
+        to_str   = ar.get("schedule_to",   "23:59")
+        return from_str <= now_str <= to_str
+    except Exception:
+        return True
+
 
 # ─── Event Log ──────────────────────────────────────────────────────────────
 class EventLog:
@@ -183,6 +263,8 @@ class BotStats:
         self.orders_processed = 0
         self.lots_raised = 0
         self.reviews_sent = 0
+        self.sales_total: float = 0.0   # сумма продаж за сессию
+        self.sales_history: list = []   # последние 50 продаж
         self.start_time: Optional[float] = None
         self._lock = threading.Lock()
 
@@ -197,7 +279,36 @@ class BotStats:
             self.orders_processed = 0
             self.lots_raised = 0
             self.reviews_sent = 0
+            self.sales_total = 0.0
+            self.sales_history = []
             self.start_time = None
+
+    def add_sale(self, order_id: str, buyer: str, price: float, title: str = ""):
+        with self._lock:
+            self.sales_total += price
+            self.sales_history.append({
+                "order_id": order_id,
+                "buyer": buyer,
+                "price": price,
+                "title": title,
+                "time": time.time(),
+            })
+            if len(self.sales_history) > 500:
+                self.sales_history = self.sales_history[-500:]
+
+    def earnings_summary(self) -> dict:
+        now = time.time()
+        with self._lock:
+            today = sum(s["price"] for s in self.sales_history if s["time"] >= now - 86400)
+            week  = sum(s["price"] for s in self.sales_history if s["time"] >= now - 86400 * 7)
+            total = self.sales_total
+            recent = list(reversed(self.sales_history[-10:]))
+        return {
+            "today": round(today, 2),
+            "week":  round(week, 2),
+            "total": round(total, 2),
+            "recent": recent,
+        }
 
     def to_dict(self) -> dict:
         uptime = "—"
@@ -205,13 +316,18 @@ class BotStats:
             secs = int(time.time() - self.start_time)
             h, m, s = secs // 3600, (secs % 3600) // 60, secs % 60
             uptime = f"{h:02d}:{m:02d}:{s:02d}"
+        earnings = self.earnings_summary()
         return {
-            "messages_sent": self.messages_sent,
+            "messages_sent":     self.messages_sent,
             "messages_received": self.messages_received,
-            "orders_processed": self.orders_processed,
-            "lots_raised": self.lots_raised,
-            "reviews_sent": self.reviews_sent,
-            "uptime": uptime,
+            "orders_processed":  self.orders_processed,
+            "lots_raised":       self.lots_raised,
+            "reviews_sent":      self.reviews_sent,
+            "sales_total":       round(self.sales_total, 2),
+            "sales_history":     self.sales_history[-10:],
+            "earnings_today":    earnings["today"],
+            "earnings_week":     earnings["week"],
+            "uptime":            uptime,
         }
 
 
@@ -456,6 +572,17 @@ class FunPayBot:
             self.stats.inc("messages_received")
             if msg.author_id == self.account.id:
                 return
+            # Чёрный список
+            bl = cfg.get("blacklist", {})
+            if bl.get("enabled"):
+                blocked_ids   = set(bl.get("user_ids", []))
+                blocked_names = [n.lower() for n in bl.get("usernames", [])]
+                if msg.author_id in blocked_ids:
+                    self.log.add("debug", "blacklist", f"Игнор {msg.author} (id в ЧС)")
+                    return
+                if msg.author and msg.author.lower() in blocked_names:
+                    self.log.add("debug", "blacklist", f"Игнор {msg.author} (username в ЧС)")
+                    return
             preview = (msg.text or "[изображение]")[:80]
             self.log.add("info", "chat", f"[{msg.chat_name}] {msg.author}: {preview}")
 
@@ -467,11 +594,32 @@ class FunPayBot:
         elif isinstance(event, NewOrderEvent):
             order = event.order
             self.stats.inc("orders_processed")
+            price = float(getattr(order, "price", 0) or 0)
+            currency = str(getattr(order, "currency", "₽") or "₽")
+            self.stats.sales_total += price
+            # Добавляем в историю продаж
+            sale = {
+                "id": order.id,
+                "buyer": order.buyer_username or "?",
+                "price": price,
+                "currency": currency,
+                "time": datetime.now().strftime("%H:%M"),
+            }
+            with self.stats._lock:
+                self.stats.sales_history.append(sale)
+                if len(self.stats.sales_history) > 50:
+                    self.stats.sales_history = self.stats.sales_history[-50:]
             self.log.add("info", "order",
-                f"🛒 Новый заказ #{order.id} от {order.buyer_username} — {order.price} {order.currency}")
-            # FIX: уведомление для фронтенда (отдельная категория для фильтра)
+                f"🛒 Новый заказ #{order.id} от {order.buyer_username} — {price} {currency}")
+            # Уведомление для фронтенда
             self.log.add("info", "new_order",
-                f'{{"id":"{order.id}","buyer":"{order.buyer_username}","price":{order.price}}}')
+                f'{{"id":"{order.id}","buyer":"{order.buyer_username}","price":{price},"currency":"{currency}"}}')
+            # Telegram уведомление о заказе
+            asyncio.get_event_loop().call_soon_threadsafe(
+                lambda: asyncio.ensure_future(
+                    tg_notify(f'🛒 Новый заказ от {buyer}\n💰 {price} {currency}\n{title}', cfg)
+                )
+            )
 
         elif isinstance(event, OrderStatusChangedEvent):
             order = event.order
@@ -552,6 +700,8 @@ class FunPayBot:
             self.account.send_review(order.id, text, rating)
             self.stats.inc("reviews_sent")
             self.log.add("info", "auto_review", f"⭐ Отзыв отправлен для #{order.id}")
+            self.log.add("info", "new_review",
+                f'{{"order_id":"{order.id}","rating":{rating}}}')
         except Exception as e:
             self.log.add("error", "auto_review", f"Ошибка отзыва: {e}")
 
@@ -563,17 +713,24 @@ class FunPayBot:
                 interval_secs = (cfg.get("auto_raise", {}).get("interval_minutes") or 60) * 60
                 categories = cfg.get("auto_raise", {}).get("categories") or []
 
-                for cat_id in categories:
-                    if self._raise_stop.is_set():
-                        return
-                    try:
-                        self.account.raise_lots(int(cat_id))
-                        self.stats.inc("lots_raised")
-                        self.log.add("info", "auto_raise", f"⬆ Лоты категории {cat_id} подняты")
-                    except Exception as e:
-                        self.log.add("warning", "auto_raise", f"Не удалось поднять {cat_id}: {e}")
-                    # Пауза между категориями — тоже через Event
-                    self._raise_stop.wait(3)
+                # Проверяем расписание
+                if not is_raise_scheduled(cfg):
+                    h_from = cfg.get("auto_raise", {}).get("schedule_from", "?")
+                    h_to   = cfg.get("auto_raise", {}).get("schedule_to", "?")
+                    self.log.add("info", "auto_raise",
+                        f"⏰ Вне расписания ({h_from}–{h_to}), пропускаю")
+                else:
+                    for cat_id in categories:
+                        if self._raise_stop.is_set():
+                            return
+                        try:
+                            self.account.raise_lots(int(cat_id))
+                            self.stats.inc("lots_raised")
+                            self.log.add("info", "auto_raise", f"⬆ Лоты категории {cat_id} подняты")
+                        except Exception as e:
+                            self.log.add("warning", "auto_raise", f"Не удалось поднять {cat_id}: {e}")
+                        # Пауза между категориями — тоже через Event
+                        self._raise_stop.wait(3)
 
                 # Устанавливаем таймер и ждём
                 self._next_raise_at = time.time() + interval_secs
@@ -825,6 +982,8 @@ def get_config():
 @app.post("/api/config")
 def set_config(body: ConfigPatch):
     cfg = load_config()
+    # Бэкап перед изменением
+    backup_config()
     for key, value in body.data.items():
         if "." in key:
             parts = key.split(".")
@@ -836,6 +995,19 @@ def set_config(body: ConfigPatch):
             cfg[key] = value
     save_config(cfg)
     return {"ok": True, "message": "Настройки сохранены"}
+
+
+@app.get("/api/backups")
+def get_backups():
+    return {"backups": list_backups()}
+
+
+@app.post("/api/backups/restore")
+def restore_backup_api(data: dict):
+    filename = data.get("filename", "")
+    if not filename or not restore_backup(filename):
+        raise HTTPException(400, "Бэкап не найден")
+    return {"ok": True, "message": f"Восстановлено из {filename}"}
 
 @app.post("/api/raise")
 def raise_lots(body: RaiseBody):
@@ -854,6 +1026,24 @@ def get_categories():
 @app.get("/api/ping")
 def ping():
     return {"pong": True, "time": datetime.now().isoformat()}
+
+
+@app.get("/api/earnings")
+def get_earnings():
+    return bot.stats.earnings_summary()
+
+
+@app.post("/api/notify/test")
+async def test_notify():
+    cfg = load_config()
+    await tg_notify("✅ FunPay Bot — тестовое уведомление работает!", cfg)
+    return {"ok": True, "message": "Уведомление отправлено"}
+
+
+@app.post("/api/backups/create")
+def create_backup_api():
+    backup_config()
+    return {"ok": True, "message": "Бэкап создан", "backups": list_backups()}
 
 
 # ─── WebSocket for live logs ──────────────────────────────────────────────────
