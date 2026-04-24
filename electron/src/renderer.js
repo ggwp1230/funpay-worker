@@ -316,10 +316,11 @@ async function clearLogs() {
 async function loadSettings() {
   const d = await api('/api/config');
   if (!d) return;
-  // FIX: golden_key не возвращается с сервера — показываем hint
   const gkInput = document.getElementById('cfg-gk');
-  if (d.has_key) {
-    gkInput.placeholder = `Токен сохранён (${d.key_hint}) — введите новый для замены`;
+  // Проверяем есть ли ключ в safeStorage
+  const keyExists = await window.electron.keyExists();
+  if (keyExists) {
+    gkInput.placeholder = '🔒 Ключ сохранён в защищённом хранилище Windows — введите новый для замены';
   } else {
     gkInput.placeholder = 'Вставьте значение куки golden_key';
   }
@@ -330,14 +331,20 @@ async function loadSettings() {
 async function saveSettings() {
   const patch = { user_agent: document.getElementById('cfg-ua').value };
   const gk = document.getElementById('cfg-gk').value.trim();
-  if (gk) patch.golden_key = gk;
-  const d = await apiPost('/api/config', { data: patch });
-  if (d.ok && gk) {
+
+  if (gk) {
+    // Сохраняем golden_key в Electron safeStorage (DPAPI/Keychain) — не в файл!
+    await window.electron.keySave(gk);
     document.getElementById('cfg-gk').value = '';
-    // Переподключаемся с новым ключом
+    // Перезапускаем бэкенд чтобы он получил новый ключ через env
+    toast('Ключ сохранён. Перезапускаю бэкенд...', '');
+    await window.electron.backendRestart();
+    await new Promise(r => setTimeout(r, 1500));
     await doConnect();
   }
-  toast(d.message, d.ok ? 'ok' : 'err');
+
+  const d = await apiPost('/api/config', { data: patch });
+  toast(d.ok ? 'Настройки сохранены' : (d.message || 'Ошибка'), d.ok ? 'ok' : 'err');
   loadSettings();
 }
 
@@ -629,10 +636,10 @@ function showOnboarding() {
 
 // ─── Logout ──────────────────────────────────────────────────────────────────
 async function logout() {
-  if (!confirm('Выйти? Токен будет удалён, потребуется войти заново.')) return;
+  if (!confirm('Выйти? VPS токен будет удалён, потребуется войти заново.')) return;
   // Останавливаем бота
   await api('/api/stop', { method: 'POST' });
-  // Очищаем localStorage
+  // Очищаем localStorage (VPS токен)
   localStorage.removeItem('ob_token');
   localStorage.removeItem('ob_mode');
   localStorage.removeItem('ob_host');
@@ -640,6 +647,13 @@ async function logout() {
   document.getElementById('onboarding').style.display = 'flex';
   setTimeout(() => document.getElementById('ob-token').focus(), 300);
   toast('Вы вышли. Введите новый токен.', '');
+}
+
+async function deleteGoldenKey() {
+  if (!confirm('Удалить golden_key из защищённого хранилища?')) return;
+  await window.electron.keyDelete();
+  toast('Golden key удалён. Укажите новый в Настройках.', 'warn');
+  loadSettings();
 }
 
 // ─── Update page logic ────────────────────────────────────────────────────────

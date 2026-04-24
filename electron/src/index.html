@@ -320,9 +320,14 @@
         <div class="card-title" style="margin-bottom:14px">⚙️ Настройки подключения</div>
         <div class="form-grid">
           <div class="form-group form-full">
-            <label>Golden Key (токен аккаунта)</label>
-            <input type="password" id="cfg-gk" placeholder="Вставьте значение куки golden_key">
-            <div class="input-hint" id="key-hint"></div>
+            <label>Golden Key (токен аккаунта FunPay)</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input type="password" id="cfg-gk" placeholder="Вставьте значение куки golden_key" style="flex:1">
+              <button class="btn btn-sm btn-danger" onclick="deleteGoldenKey()" title="Удалить ключ из хранилища">🗑</button>
+            </div>
+            <div class="input-hint">
+              🔒 Ключ хранится в <b>Windows Credential Manager</b> (DPAPI) — не в файлах на диске
+            </div>
           </div>
           <div class="form-group form-full">
             <label>User Agent (опционально)</label>
