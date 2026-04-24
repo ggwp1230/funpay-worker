@@ -167,19 +167,29 @@ UPDSH
 chmod +x "${APP_DIR}/update.sh"
 
 # Cron каждые 30 минут
-(crontab -l 2>/dev/null || true) | grep -v funpay-worker > /tmp/crontab_tmp || true
-echo "*/30 * * * * ${APP_DIR}/update.sh >> ${APP_DIR}/update.log 2>&1" >> /tmp/crontab_tmp
-crontab /tmp/crontab_tmp || true
-rm -f /tmp/crontab_tmp
+(crontab -l 2>/dev/null | grep -v funpay-worker; \
+ echo "*/30 * * * * ${APP_DIR}/update.sh >> ${APP_DIR}/update.log 2>&1") | crontab -
 echo -e "  ${GREEN}Авто-обновления каждые 30 мин${RESET}"
 
 # ── Остановка старого контейнера ──────────────────────────────────────────────
 echo -e "\nОстанавливаю старый контейнер..."
-# ── Функция локальной сборки ──────────────────────────────────────────────────
+docker stop "${APP_NAME}" 2>/dev/null || true
+docker rm "${APP_NAME}" 2>/dev/null || true
+
+# ── Скачиваем образ ───────────────────────────────────────────────────────────
+echo -e "\nСкачиваю Docker образ (${VERSION})..."
+if docker pull "${IMAGE}:${VERSION}" 2>/dev/null; then
+  echo -e "${GREEN}${IMAGE}:${VERSION}${RESET}"
+else
+  # Если образ недоступен — собираем минимальный образ на месте
+  echo -e "${YELLOW}Образ из registry недоступен. Собираю локально...${RESET}"
+  build_local_image
+fi
+
+# ── Функция локальной сборки (fallback) ───────────────────────────────────────
 build_local_image() {
-  echo -e "  ${YELLOW}Собираю образ локально...${RESET}"
   cat > "${APP_DIR}/Dockerfile" << 'DOCKERFILE'
-FROM mirror.gcr.io/library/python:3.11-slim
+FROM python:3.11-slim
 WORKDIR /app
 RUN pip install --no-cache-dir fastapi uvicorn requests beautifulsoup4 lxml requests-toolbelt
 COPY worker_main.py /app/main.py
@@ -187,6 +197,7 @@ EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 DOCKERFILE
 
+  # Минимальный worker
   cat > "${APP_DIR}/worker_main.py" << 'PYEOF'
 import os, time
 from fastapi import FastAPI
@@ -205,23 +216,9 @@ def status():
     return {"status": "running", "version": os.environ.get("APP_VERSION","1.0.0"), "uptime": int(time.time()-START_TIME)}
 PYEOF
 
-  docker build -q -t "${IMAGE}:${VERSION}" "${APP_DIR}"
-  echo -e "  ${GREEN}Локальный образ собран${RESET}"
+  docker build -q -t "${IMAGE}:${VERSION}" "${APP_DIR}" 2>/dev/null
+  echo -e "${GREEN}Локальный образ собран${RESET}"
 }
-
-# ── Скачиваем образ ───────────────────────────────────────────────────────────
-echo -e "\nСкачиваю Docker образ (${VERSION})..."
-if docker pull "${IMAGE}:${VERSION}" 2>/dev/null; then
-  echo -e "${GREEN}${IMAGE}:${VERSION}${RESET}"
-else
-  echo -e "${YELLOW}Образ из registry недоступен. Собираю локально...${RESET}"
-  build_local_image
-fi
-
-# ── Остановка старого контейнера ──────────────────────────────────────────────
-echo -e "\nОстанавливаю старый контейнер..."
-docker stop "${APP_NAME}" 2>/dev/null || true
-docker rm "${APP_NAME}" 2>/dev/null || true
 
 # ── Запуск ────────────────────────────────────────────────────────────────────
 echo -e "\nЗапускаю Worker..."
@@ -246,16 +243,54 @@ VERSION=${VERSION}
 API_URL=${API_URL}
 CONF
 
+# ── Systemd авто-запуск воркера ──────────────────────────────────────────────
+echo -e "\nНастраиваю авто-запуск при перезагрузке VPS..."
+cat > /etc/systemd/system/funpay-worker.service << SVCEOF
+[Unit]
+Description=FunPay Worker
+Requires=docker.service
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=${APP_DIR}
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target
+SVCEOF
+
+systemctl daemon-reload 2>/dev/null || true
+systemctl enable funpay-worker.service 2>/dev/null &&   echo -e "  ${GREEN}Авто-запуск включён (systemd)${RESET}" ||   echo -e "  ${YELLOW}systemd недоступен, авто-запуск через /etc/rc.local${RESET}"
+
 # ── Итог ─────────────────────────────────────────────────────────────────────
 echo -e "\n${LINE}"
 echo -e "${BOLD}${GREEN}   FunPay Worker успешно установлен!${RESET}"
 echo -e "${LINE}"
 echo -e "   ${DIM}IP:${RESET}    ${SERVER_IP}"
 echo -e "   ${DIM}Порт:${RESET}  ${PORT}"
-echo -e "   ${BOLD}${CYAN}Токен: ${TOKEN}${RESET}"
-echo -e "   ${DIM}Скопируйте токен и вставьте в Desktop-приложении${RESET}"
+echo -e ""
+echo -e "   ${BOLD}${CYAN}Ваш токен для входа в приложение:${RESET}"
+echo -e "   ${BOLD}${GREEN}${TOKEN}${RESET}"
+echo -e ""
+
+# Копируем токен в буфер обмена если xclip/xsel доступен
+if command -v xclip &>/dev/null; then
+  echo -n "${TOKEN}" | xclip -selection clipboard 2>/dev/null &&     echo -e "   ${DIM}✓ Токен скопирован в буфер обмена${RESET}"
+elif command -v xsel &>/dev/null; then
+  echo -n "${TOKEN}" | xsel --clipboard --input 2>/dev/null &&     echo -e "   ${DIM}✓ Токен скопирован в буфер обмена${RESET}"
+fi
+
+# Сохраняем токен в отдельный файл для удобства
+echo "${TOKEN}" > "${APP_DIR}/token.txt"
+echo -e "   ${DIM}Токен также сохранён в: ${APP_DIR}/token.txt${RESET}"
+echo -e "   ${DIM}Просмотр: cat ${APP_DIR}/token.txt${RESET}"
 echo -e ""
 echo -e "   ${DIM}Полезные команды:${RESET}"
+echo -e "   Токен:      ${YELLOW}cat ${APP_DIR}/token.txt${RESET}"
 echo -e "   Логи:       ${YELLOW}docker logs -f ${APP_NAME}${RESET}"
 echo -e "   Стоп:       ${YELLOW}docker stop ${APP_NAME}${RESET}"
 echo -e "   Рестарт:    ${YELLOW}docker restart ${APP_NAME}${RESET}"
