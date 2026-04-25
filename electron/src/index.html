@@ -81,6 +81,10 @@
       <span class="nav-icon" id="update-nav-icon">↑</span> Обновления
     </div>
 
+    <div class="nav-item" id="nav-plugins" onclick="go('plugins')">
+      <span class="nav-icon">🧩</span> Плагины
+    </div>
+
     <div class="nav-sep"></div>
     <div class="nav-section">Управление</div>
     <div class="nav-item" id="nav-start" onclick="startBot()">
@@ -521,6 +525,52 @@
         <div id="upd-connect-result" style="margin-top:10px;font-size:12px;min-height:16px"></div>
       </div>
     </div><!-- /page-update -->
+
+    <!-- ── Page: Плагины ── -->
+    <div class="page" id="page-plugins">
+      <div class="page-header">
+        <span class="page-title">Плагины</span>
+      </div>
+
+      <!-- Установленные -->
+      <div class="card" id="pl-installed-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div class="card-title">Установлено</div>
+          <button class="btn btn-sm" onclick="loadInstalledPlugins()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">↻</button>
+        </div>
+        <div id="pl-installed-list" class="plugin-list">
+          <div class="text-dim" style="font-size:12px;text-align:center;padding:18px 0">Загрузка...</div>
+        </div>
+      </div>
+
+      <!-- Магазин -->
+      <div class="card" id="pl-store-card">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div class="card-title">Магазин</div>
+          <button class="btn btn-sm" onclick="loadPluginStore()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">↻ Обновить</button>
+        </div>
+        <div id="pl-store-list" class="plugin-list">
+          <div class="text-dim" style="font-size:12px;text-align:center;padding:18px 0">Нажми «Обновить» чтобы загрузить список</div>
+        </div>
+        <div id="pl-store-error" class="text-dim" style="font-size:11px;margin-top:8px;color:var(--red);display:none"></div>
+      </div>
+
+      <!-- Модалка настроек -->
+      <div id="pl-settings-modal" class="pl-modal" style="display:none">
+        <div class="pl-modal-box">
+          <div class="card-hd" style="margin-bottom:14px">
+            <div class="card-title" id="pl-settings-title">Настройки</div>
+            <button class="btn btn-sm" onclick="closePluginSettings()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">✕</button>
+          </div>
+          <div id="pl-settings-form"></div>
+          <div style="display:flex;gap:8px;margin-top:18px;justify-content:flex-end">
+            <button class="btn" onclick="closePluginSettings()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">Отмена</button>
+            <button class="btn btn-primary" onclick="savePluginSettings()">Сохранить</button>
+          </div>
+          <div id="pl-settings-result" style="margin-top:8px;font-size:12px;min-height:16px"></div>
+        </div>
+      </div>
+    </div><!-- /page-plugins -->
 
   </div><!-- /content -->
 </div><!-- /app -->

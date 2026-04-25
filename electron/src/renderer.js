@@ -912,4 +912,256 @@ window.go = function(page) {
   if (page === 'notify')    loadTgNotify();
   if (page === 'backup')    loadBackups();
   if (page === 'update')    checkUpdates();
+  if (page === 'plugins')   { loadInstalledPlugins(); loadPluginStore(); }
 };
+
+// ─── Plugins ─────────────────────────────────────────────────────────────────
+let _plPendingPluginId = null;
+let _plPendingPluginMeta = null;
+const _plInstalledById = {};  // id → meta для callback'ов
+
+async function loadInstalledPlugins() {
+  const wrap = document.getElementById('pl-installed-list');
+  wrap.innerHTML = '<div class="text-dim" style="font-size:12px;text-align:center;padding:18px 0">Загрузка...</div>';
+  let d;
+  try {
+    d = await api('/api/plugins/installed');
+  } catch (e) {
+    wrap.innerHTML = '<div class="text-dim" style="font-size:12px;text-align:center;padding:18px 0;color:var(--red)">Подсистема плагинов недоступна</div>';
+    return;
+  }
+  if (!d || !Array.isArray(d.plugins)) {
+    wrap.innerHTML = '<div class="text-dim" style="font-size:12px;text-align:center;padding:18px 0;color:var(--red)">' +
+      esc(d?.detail || 'Не удалось получить список') + '</div>';
+    return;
+  }
+  // обновляем кэш
+  Object.keys(_plInstalledById).forEach(k => delete _plInstalledById[k]);
+  d.plugins.forEach(p => { _plInstalledById[p.id] = p; });
+  if (d.plugins.length === 0) {
+    wrap.innerHTML = '<div class="text-dim" style="font-size:12px;text-align:center;padding:18px 0">Пока ничего не установлено</div>';
+    return;
+  }
+  wrap.innerHTML = d.plugins.map(renderInstalledRow).join('');
+}
+
+function renderInstalledRow(p) {
+  const id = esc(p.id);
+  const safeId = encodeURIComponent(p.id);
+  let badge = '<span class="pl-badge pl-badge-off">выкл</span>';
+  if (p.error) badge = '<span class="pl-badge pl-badge-err">ошибка</span>';
+  else if (p.enabled && p.loaded) badge = '<span class="pl-badge pl-badge-on">вкл</span>';
+  const errBlock = p.error
+    ? `<div class="pl-error">⚠ ${esc(p.error)}</div>`
+    : '';
+  const desc = p.description
+    ? `<div class="pl-desc">${esc(p.description)}</div>` : '';
+  const author = p.author ? ` · ${esc(p.author)}` : '';
+  const hasConfigSchema = Array.isArray(p.config_schema) && p.config_schema.length > 0;
+  return `
+    <div class="plugin-row" data-id="${id}">
+      <div class="pl-main">
+        <div class="pl-name">
+          ${esc(p.name || p.id)}
+          <span class="pl-ver">v${esc(p.version || '?')}</span>
+          ${badge}
+        </div>
+        <div class="pl-meta">${id}${author}</div>
+        ${desc}
+        ${errBlock}
+      </div>
+      <div class="pl-actions">
+        <label class="pl-toggle ${p.enabled ? 'is-on' : ''}">
+          <input type="checkbox" ${p.enabled ? 'checked' : ''}
+                 onchange="togglePlugin('${id}', this.checked)"> ${p.enabled ? 'Включен' : 'Выключен'}
+        </label>
+        ${hasConfigSchema
+          ? `<button class="btn btn-sm" onclick="openPluginSettingsById('${id}')" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">⚙ Настройки</button>`
+          : ''}
+        <button class="btn btn-sm" onclick="uninstallPlugin('${id}')" style="background:var(--bg3);color:var(--red);border:1px solid var(--border)">🗑 Удалить</button>
+      </div>
+    </div>`;
+}
+
+async function togglePlugin(id, enabled) {
+  const d = await apiPost('/api/plugins/toggle', { id, enabled });
+  if (d && d.ok) {
+    toast(enabled ? `Плагин ${id} включён` : `Плагин ${id} отключён`, 'ok');
+  } else {
+    toast('Не удалось переключить: ' + (d?.detail || 'ошибка'), 'err');
+  }
+  loadInstalledPlugins();
+}
+
+async function uninstallPlugin(id) {
+  if (!confirm(`Удалить плагин ${id}? Его данные и настройки тоже будут стёрты.`)) return;
+  const d = await apiPost('/api/plugins/uninstall', { id });
+  if (d && d.ok) {
+    toast(`Плагин ${id} удалён`, 'ok');
+  } else {
+    toast('Не удалось удалить: ' + (d?.detail || 'ошибка'), 'err');
+  }
+  loadInstalledPlugins();
+}
+
+async function loadPluginStore() {
+  const wrap = document.getElementById('pl-store-list');
+  const errEl = document.getElementById('pl-store-error');
+  errEl.style.display = 'none';
+  wrap.innerHTML = '<div class="text-dim" style="font-size:12px;text-align:center;padding:18px 0">Загрузка...</div>';
+  const d = await api('/api/plugins/store');
+  if (!d || !Array.isArray(d.plugins)) {
+    wrap.innerHTML = '<div class="text-dim" style="font-size:12px;text-align:center;padding:18px 0">Магазин недоступен</div>';
+    errEl.style.display = 'block';
+    errEl.textContent = d?.detail || 'Проверь подключение к серверу обновлений';
+    return;
+  }
+  if (d.plugins.length === 0) {
+    wrap.innerHTML = '<div class="text-dim" style="font-size:12px;text-align:center;padding:18px 0">В магазине пока пусто</div>';
+    return;
+  }
+  wrap.innerHTML = d.plugins.map(renderStoreRow).join('');
+}
+
+function renderStoreRow(p) {
+  const id = esc(p.id);
+  const desc = p.description
+    ? `<div class="pl-desc">${esc(p.description)}</div>` : '';
+  const author = p.author ? ` · ${esc(p.author)}` : '';
+  const sizeKb = p.size ? ` · ${(p.size / 1024).toFixed(1)} КБ` : '';
+  return `
+    <div class="plugin-row">
+      <div class="pl-main">
+        <div class="pl-name">
+          ${esc(p.name || p.id)}
+          <span class="pl-ver">v${esc(p.version || '?')}</span>
+        </div>
+        <div class="pl-meta">${id}${author}${sizeKb}</div>
+        ${desc}
+      </div>
+      <div class="pl-actions">
+        <button class="btn btn-sm btn-primary" onclick="installPlugin('${id}')">⬇ Установить</button>
+      </div>
+    </div>`;
+}
+
+async function installPlugin(id) {
+  toast(`Загружаю ${id}...`, '');
+  const d = await apiPost('/api/plugins/install', { id });
+  if (d && d.ok) {
+    toast(`Плагин ${id} установлен`, 'ok');
+    loadInstalledPlugins();
+  } else {
+    toast('Не удалось установить: ' + (d?.detail || 'ошибка'), 'err');
+  }
+}
+
+// ── Settings modal ──
+function openPluginSettingsById(id) {
+  const p = _plInstalledById[id];
+  if (!p) {
+    toast('Плагин не найден в кэше — обнови список', 'err');
+    return;
+  }
+  return openPluginSettings(p);
+}
+
+async function openPluginSettings(plugin) {
+  _plPendingPluginId = plugin.id;
+  _plPendingPluginMeta = plugin;
+  document.getElementById('pl-settings-title').textContent =
+    'Настройки — ' + (plugin.name || plugin.id);
+  document.getElementById('pl-settings-result').textContent = '';
+  document.getElementById('pl-settings-modal').style.display = 'flex';
+
+  // Получаем актуальные значения
+  const d = await api(`/api/plugins/${encodeURIComponent(plugin.id)}/config`);
+  const values = (d && d.config) || {};
+
+  const schema = plugin.config_schema || [];
+  document.getElementById('pl-settings-form').innerHTML =
+    schema.map(f => renderField(f, values[f.key])).join('');
+}
+
+function renderField(field, value) {
+  const key = esc(field.key);
+  const label = esc(field.label || field.key);
+  const help = field.help ? `<div class="pl-help">${esc(field.help)}</div>` : '';
+  const def = field.default;
+  const v = (value !== undefined && value !== null) ? value : (def !== undefined ? def : '');
+
+  switch (field.type) {
+    case 'number':
+      return `
+        <div class="pl-field">
+          <label>${label}</label>
+          <input type="number" data-pl-key="${key}" value="${esc(String(v ?? ''))}"
+                 ${field.min !== undefined ? `min="${esc(String(field.min))}"` : ''}
+                 ${field.max !== undefined ? `max="${esc(String(field.max))}"` : ''}
+                 ${field.step !== undefined ? `step="${esc(String(field.step))}"` : ''}>
+          ${help}
+        </div>`;
+    case 'checkbox':
+    case 'bool':
+      return `
+        <div class="pl-field">
+          <label class="pl-toggle ${v ? 'is-on' : ''}" style="text-transform:none;letter-spacing:0">
+            <input type="checkbox" data-pl-key="${key}" ${v ? 'checked' : ''}> ${label}
+          </label>
+          ${help}
+        </div>`;
+    case 'textarea':
+      return `
+        <div class="pl-field">
+          <label>${label}</label>
+          <textarea data-pl-key="${key}" rows="${field.rows || 5}">${esc(String(v ?? ''))}</textarea>
+          ${help}
+        </div>`;
+    case 'password':
+      return `
+        <div class="pl-field">
+          <label>${label}</label>
+          <input type="password" data-pl-key="${key}" value="${esc(String(v ?? ''))}">
+          ${help}
+        </div>`;
+    case 'text':
+    default:
+      return `
+        <div class="pl-field">
+          <label>${label}</label>
+          <input type="text" data-pl-key="${key}" value="${esc(String(v ?? ''))}">
+          ${help}
+        </div>`;
+  }
+}
+
+function closePluginSettings() {
+  document.getElementById('pl-settings-modal').style.display = 'none';
+  _plPendingPluginId = null;
+  _plPendingPluginMeta = null;
+}
+
+async function savePluginSettings() {
+  if (!_plPendingPluginId) return;
+  const values = {};
+  document.querySelectorAll('#pl-settings-form [data-pl-key]').forEach(el => {
+    const key = el.getAttribute('data-pl-key');
+    if (el.type === 'checkbox') values[key] = el.checked;
+    else if (el.type === 'number') {
+      const n = el.value === '' ? null : Number(el.value);
+      values[key] = (n === null || Number.isNaN(n)) ? null : n;
+    } else values[key] = el.value;
+  });
+  const id = _plPendingPluginId;
+  const d = await apiPost(`/api/plugins/${encodeURIComponent(id)}/config`, values);
+  const res = document.getElementById('pl-settings-result');
+  if (d && d.ok) {
+    res.style.color = 'var(--green)';
+    res.textContent = '✓ Сохранено';
+    setTimeout(closePluginSettings, 600);
+    setTimeout(loadInstalledPlugins, 700);
+  } else {
+    res.style.color = 'var(--red)';
+    res.textContent = '✗ ' + (d?.detail || 'Ошибка сохранения');
+  }
+}
