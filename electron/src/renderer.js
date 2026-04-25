@@ -503,6 +503,22 @@ async function raiseNow() {
   if (ok) toast(`Поднято ${ok} из ${cats.length} категорий`, 'ok');
 }
 
+// ─── Theme ────────────────────────────────────────────────────────────────────
+function applyTheme(t) {
+  document.documentElement.setAttribute('data-theme', t);
+  localStorage.setItem('fpn_theme', t);
+  const icon = document.getElementById('theme-icon');
+  if (icon) icon.textContent = t === 'light' ? '☀' : '🌙';
+}
+function toggleTheme() {
+  const cur = document.documentElement.getAttribute('data-theme') || 'dark';
+  applyTheme(cur === 'light' ? 'dark' : 'light');
+}
+// синхронизируем иконку при загрузке
+document.addEventListener('DOMContentLoaded', () => {
+  applyTheme(localStorage.getItem('fpn_theme') || 'dark');
+});
+
 // ─── Utility ──────────────────────────────────────────────────────────────────
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
