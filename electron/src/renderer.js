@@ -507,6 +507,18 @@ async function raiseNow() {
 function esc(s) {
   return String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+// Экранирование значения, которое подставляется внутрь одинарных кавычек
+// в inline-атрибутах вроде onclick="foo('${escJsAttr(x)}')". Покрывает то,
+// что esc() не покрывает: backslash и одинарную кавычку.
+function escJsAttr(s) {
+  return String(s || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
 
 // ─── Onboarding Screen ───────────────────────────────────────────────────────
 
@@ -886,7 +898,7 @@ async function loadBackups() {
   list.innerHTML = backups.map(b => `
     <div class="backup-row">
       <span class="backup-name">${esc(b)}</span>
-      <button class="btn btn-sm btn-danger" onclick="restoreBackup('${esc(b)}')">↩ Восстановить</button>
+      <button class="btn btn-sm btn-danger" onclick="restoreBackup('${escJsAttr(b)}')">↩ Восстановить</button>
     </div>
   `).join('');
 }
@@ -946,8 +958,10 @@ async function loadInstalledPlugins() {
 }
 
 function renderInstalledRow(p) {
-  const id = esc(p.id);
-  const safeId = encodeURIComponent(p.id);
+  // id для отображения в HTML и id для безопасной подстановки в JS-строку
+  // в inline-обработчиках. Они РАЗНЫЕ — последний экранирует одинарные кавычки.
+  const idHtml = esc(p.id);
+  const idJs = escJsAttr(p.id);
   let badge = '<span class="pl-badge pl-badge-off">выкл</span>';
   if (p.error) badge = '<span class="pl-badge pl-badge-err">ошибка</span>';
   else if (p.enabled && p.loaded) badge = '<span class="pl-badge pl-badge-on">вкл</span>';
@@ -959,26 +973,26 @@ function renderInstalledRow(p) {
   const author = p.author ? ` · ${esc(p.author)}` : '';
   const hasConfigSchema = Array.isArray(p.config_schema) && p.config_schema.length > 0;
   return `
-    <div class="plugin-row" data-id="${id}">
+    <div class="plugin-row" data-id="${idHtml}">
       <div class="pl-main">
         <div class="pl-name">
           ${esc(p.name || p.id)}
           <span class="pl-ver">v${esc(p.version || '?')}</span>
           ${badge}
         </div>
-        <div class="pl-meta">${id}${author}</div>
+        <div class="pl-meta">${idHtml}${author}</div>
         ${desc}
         ${errBlock}
       </div>
       <div class="pl-actions">
         <label class="pl-toggle ${p.enabled ? 'is-on' : ''}">
           <input type="checkbox" ${p.enabled ? 'checked' : ''}
-                 onchange="togglePlugin('${id}', this.checked)"> ${p.enabled ? 'Включен' : 'Выключен'}
+                 onchange="togglePlugin('${idJs}', this.checked)"> ${p.enabled ? 'Включен' : 'Выключен'}
         </label>
         ${hasConfigSchema
-          ? `<button class="btn btn-sm" onclick="openPluginSettingsById('${id}')" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">⚙ Настройки</button>`
+          ? `<button class="btn btn-sm" onclick="openPluginSettingsById('${idJs}')" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">⚙ Настройки</button>`
           : ''}
-        <button class="btn btn-sm" onclick="uninstallPlugin('${id}')" style="background:var(--bg3);color:var(--red);border:1px solid var(--border)">🗑 Удалить</button>
+        <button class="btn btn-sm" onclick="uninstallPlugin('${idJs}')" style="background:var(--bg3);color:var(--red);border:1px solid var(--border)">🗑 Удалить</button>
       </div>
     </div>`;
 }
@@ -1024,7 +1038,8 @@ async function loadPluginStore() {
 }
 
 function renderStoreRow(p) {
-  const id = esc(p.id);
+  const idHtml = esc(p.id);
+  const idJs = escJsAttr(p.id);
   const desc = p.description
     ? `<div class="pl-desc">${esc(p.description)}</div>` : '';
   const author = p.author ? ` · ${esc(p.author)}` : '';
@@ -1036,11 +1051,11 @@ function renderStoreRow(p) {
           ${esc(p.name || p.id)}
           <span class="pl-ver">v${esc(p.version || '?')}</span>
         </div>
-        <div class="pl-meta">${id}${author}${sizeKb}</div>
+        <div class="pl-meta">${idHtml}${author}${sizeKb}</div>
         ${desc}
       </div>
       <div class="pl-actions">
-        <button class="btn btn-sm btn-primary" onclick="installPlugin('${id}')">⬇ Установить</button>
+        <button class="btn btn-sm btn-primary" onclick="installPlugin('${idJs}')">⬇ Установить</button>
       </div>
     </div>`;
 }
