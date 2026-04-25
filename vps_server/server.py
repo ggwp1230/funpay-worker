@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, File, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -145,8 +145,8 @@ def api_version():
 @app.post("/admin/upload")
 async def upload_update(
     file: UploadFile = File(...),
-    version: str = "1.0.0",
-    changelog: str = "",
+    version: str = Form("1.0.0"),
+    changelog: str = Form(""),
     x_admin_token: Optional[str] = Header(None)
 ):
     require_admin(x_admin_token)
@@ -271,9 +271,12 @@ async function uploadUpdate() {{
   if (!file) {{ showResult('result2', 'Выберите файл', false); return; }}
   const ver = document.getElementById('new-version').value.trim() || '1.0.0';
   const cl  = document.getElementById('changelog').value.trim();
-  const fd = new FormData(); fd.append('file', file);
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('version', ver);
+  fd.append('changelog', cl);
   showResult('result2', 'Загружаю...', true);
-  const r = await fetch(`/admin/upload?version=${{encodeURIComponent(ver)}}&changelog=${{encodeURIComponent(cl)}}`, {{method:'POST',headers:{{'x-admin-token':_token}},body:fd}});
+  const r = await fetch('/admin/upload', {{method:'POST',headers:{{'x-admin-token':_token}},body:fd}});
   const d = await r.json();
   if (r.ok) {{ showResult('result2', `Загружено v${{d.version}}`, true); }}
   else {{ showResult('result2', d.detail||'Ошибка', false); }}
