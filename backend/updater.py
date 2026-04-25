@@ -166,6 +166,18 @@ class Updater:
         """Распаковывает архив поверх текущих файлов (кроме config/ и FunPayAPI/)."""
         app_root = Path(__file__).parent.parent  # project root
 
+        # В прод-сборке Electron-фронт лежит в app.asar.unpacked/electron/...
+        # рядом с backend/. В dev — обычный layout с папкой electron/ в корне.
+        asar_unpacked = app_root / "app.asar.unpacked"
+        prod_layout = asar_unpacked.exists() and asar_unpacked.is_dir()
+
+        def resolve_path(rel_path: str) -> Path:
+            """Куда писать/читать файл относительно реальной структуры на диске."""
+            rel = rel_path.replace("\\", "/")
+            if prod_layout and rel.startswith("electron/"):
+                return asar_unpacked / rel
+            return app_root / rel
+
         # Папки, которые НЕ трогаем при обновлении
         PROTECTED = {
             "backend/config",
@@ -192,14 +204,14 @@ class Updater:
                 members = [m for m in zf.namelist()
                            if not m.endswith("/") and not is_protected(m)]
 
-            existing = [m for m in members if (app_root / m).is_file()]
+            existing = [m for m in members if resolve_path(m).is_file()]
             total_b = len(existing) or 1
             if progress_cb:
                 progress_cb("backing_up", 0, total_b)
 
             with zipfile.ZipFile(backup_file, "w", zipfile.ZIP_DEFLATED) as bz:
                 for i, member in enumerate(existing, 1):
-                    src_path = app_root / member
+                    src_path = resolve_path(member)
                     try:
                         bz.write(src_path, member)
                     except Exception as e:
@@ -219,7 +231,7 @@ class Updater:
                     progress_cb("extracting", 0, total_e)
 
                 for i, member in enumerate(members, 1):
-                    dest = app_root / member
+                    dest = resolve_path(member)
                     if member.endswith("/"):
                         dest.mkdir(parents=True, exist_ok=True)
                     else:
