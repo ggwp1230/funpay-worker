@@ -437,9 +437,11 @@ class FPNexus:
     def stop(self):
         self._running = False
         self._status = "stopped"
-        # FIX: мгновенно будим raise_loop через Event
+        # Сбрасываем runner — освобождаем аккаунт для повторного подключения
+        self.runner = None
+        self.account = None
+        # Мгновенно будим raise_loop через Event
         self._raise_stop.set()
-        # Останавливаем поток обновления аккаунта
         if hasattr(self, "_account_refresh_stop"):
             self._account_refresh_stop.set()
         self.stats.reset()
@@ -470,6 +472,9 @@ class FPNexus:
             restarts += 1
             self.log.add("warning", "client",
                 f"Бот упал. Перезапуск через {RESTART_DELAY}с... (попытка {restarts}/{MAX_RESTARTS})")
+            # Сбрасываем runner и аккаунт перед перезапуском
+            self.runner = None
+            self.account = None
             # Ждём перед рестартом (прерываемое ожидание)
             for _ in range(RESTART_DELAY):
                 if self._status == "stopped":
@@ -506,6 +511,9 @@ class FPNexus:
                 f"✓ Авторизован как {self.account.username} | "
                 f"Баланс: {bal} | Продажи: {self.account.active_sales or 0}")
 
+            # Пересоздаём Runner — старый должен быть None
+            self.runner = None
+            time.sleep(1)  # Даём FunPayAPI время освободить аккаунт
             self.runner = FunPayAPI.Runner(self.account)
             self._running = True
             self._status = "running"

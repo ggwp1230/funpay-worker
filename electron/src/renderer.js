@@ -904,4 +904,5 @@ window.go = function(page) {
   if (page === 'blacklist') loadBlacklist();
   if (page === 'notify')    loadTgNotify();
   if (page === 'backup')    loadBackups();
+  if (page === 'update')    checkUpdates();
 };
