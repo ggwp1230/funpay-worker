@@ -898,7 +898,7 @@ async function loadBackups() {
   list.innerHTML = backups.map(b => `
     <div class="backup-row">
       <span class="backup-name">${esc(b)}</span>
-      <button class="btn btn-sm btn-danger" onclick="restoreBackup('${esc(b)}')">↩ Восстановить</button>
+      <button class="btn btn-sm btn-danger" onclick="restoreBackup('${escJsAttr(b)}')">↩ Восстановить</button>
     </div>
   `).join('');
 }
