@@ -167,8 +167,10 @@ UPDSH
 chmod +x "${APP_DIR}/update.sh"
 
 # Cron каждые 30 минут
-(crontab -l 2>/dev/null | grep -v funpay-worker; \
- echo "*/30 * * * * ${APP_DIR}/update.sh >> ${APP_DIR}/update.log 2>&1") | crontab -
+(crontab -l 2>/dev/null || true) | grep -v funpay-worker > /tmp/crontab_tmp || true
+echo "*/30 * * * * ${APP_DIR}/update.sh >> ${APP_DIR}/update.log 2>&1" >> /tmp/crontab_tmp
+crontab /tmp/crontab_tmp || true
+rm -f /tmp/crontab_tmp
 echo -e "  ${GREEN}Авто-обновления каждые 30 мин${RESET}"
 
 # ── Остановка старого контейнера ──────────────────────────────────────────────
