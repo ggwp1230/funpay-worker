@@ -1,4 +1,4 @@
-# ⚡ FunPay Bot
+# ⚡ FP Nexus
 
 Приложение для автоматизации FunPay на базе **Electron + Python FastAPI**.
 
@@ -7,7 +7,7 @@
 ## 📁 Структура проекта
 
 ```
-FunPayBot/
+FPNexus/
 ├── backend/
 │   ├── main.py            ← FastAPI-сервер (бизнес-логика)
 │   ├── requirements.txt   ← Python-зависимости
@@ -102,7 +102,7 @@ FunPayBot/
 
 ```bash
 npm run build
-# → dist/FunPay Bot Setup 1.0.0.exe
+# → dist/FP Nexus Setup 1.0.0.exe
 ```
 
 ---

@@ -1,11 +1,11 @@
 @echo off
 chcp 65001 >nul
 color 0A
-title FunPay Bot - Zapusk
+title FP Nexus - Zapusk
 
 echo.
 echo  =====================================================
-echo             FunPay Bot  -  Launcher
+echo             FP Nexus  -  Launcher
 echo  =====================================================
 echo.
 
