@@ -726,6 +726,12 @@ async function applyUpdate() {
       const total = p.total ? Math.round(p.total / 1024) : 0;
       document.getElementById('upd-progress-label').textContent =
         `Скачивание... ${done} / ${total} KB`;
+    } else if (p.status === 'backing_up') {
+      document.getElementById('upd-progress-label').textContent =
+        `Создаю резервную копию... ${p.done || 0} / ${p.total || 0}`;
+    } else if (p.status === 'extracting') {
+      document.getElementById('upd-progress-label').textContent =
+        `Распаковка... ${p.done || 0} / ${p.total || 0}`;
     } else if (p.status === 'done') {
       clearInterval(_progressPoller);
       document.getElementById('upd-progress-label').textContent = 'Готово! Перезапустите приложение.';

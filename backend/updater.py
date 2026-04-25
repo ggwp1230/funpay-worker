@@ -96,12 +96,13 @@ class Updater:
             return False, {"error": str(e)}
 
     def download_and_apply(self,
-                           progress_cb: Optional[Callable[[int, int], None]] = None
+                           progress_cb: Optional[Callable[[str, int, int], None]] = None
                            ) -> tuple[bool, str]:
         """
         Скачивает архив с сервера, проверяет хэш, применяет обновление.
         Возвращает (success, message).
-        progress_cb(downloaded_bytes, total_bytes) — колбэк прогресса.
+        progress_cb(stage, done, total) — колбэк прогресса.
+        stage: 'downloading' | 'backing_up' | 'extracting'.
         """
         has_update, meta = self.check_update()
         if meta.get("error"):
@@ -133,39 +134,37 @@ class Updater:
                     tmp.write(chunk)
                     downloaded += len(chunk)
                     if progress_cb and total:
-                        progress_cb(downloaded, total)
+                        progress_cb("downloading", downloaded, total)
 
         except Exception as e:
             return False, f"Ошибка скачивания: {e}"
 
         # Проверяем хэш
         if expected_hash:
-            actual_hash = sha256_file(tmp_path)
+            try:
+                actual_hash = sha256_file(tmp_path)
+            except Exception as e:
+                tmp_path.unlink(missing_ok=True)
+                return False, f"Не удалось проверить хэш: {e}"
             if actual_hash != expected_hash:
                 tmp_path.unlink(missing_ok=True)
-                return False, f"Ошибка целостности файла (SHA256 не совпадает)"
+                return False, "Ошибка целостности файла (SHA256 не совпадает)"
             self._log("Хэш файла проверен ✓")
 
         # Применяем обновление
-        ok, msg = self._apply_update(tmp_path, remote_ver)
-        tmp_path.unlink(missing_ok=True)
+        try:
+            ok, msg = self._apply_update(tmp_path, remote_ver, progress_cb=progress_cb)
+        except Exception as e:
+            ok, msg = False, f"Ошибка при применении обновления: {e}"
+        finally:
+            tmp_path.unlink(missing_ok=True)
         return ok, msg
 
-    def _apply_update(self, zip_path: Path, new_version: str) -> tuple[bool, str]:
+    def _apply_update(self, zip_path: Path, new_version: str,
+                      progress_cb: Optional[Callable[[str, int, int], None]] = None
+                      ) -> tuple[bool, str]:
         """Распаковывает архив поверх текущих файлов (кроме config/ и FunPayAPI/)."""
         app_root = Path(__file__).parent.parent  # project root
-
-        # Создаём бэкап
-        try:
-            BACKUP_DIR.mkdir(exist_ok=True)
-            backup_file = BACKUP_DIR / f"backup_{int(time.time())}.zip"
-            self._log("Создаю резервную копию...")
-            with zipfile.ZipFile(backup_file, "w", zipfile.ZIP_DEFLATED) as bz:
-                for p in app_root.rglob("*"):
-                    if p.is_file() and "node_modules" not in str(p) and "backup" not in str(p):
-                        bz.write(p, p.relative_to(app_root))
-        except Exception as e:
-            self._log(f"Предупреждение: не удалось создать бэкап: {e}")
 
         # Папки, которые НЕ трогаем при обновлении
         PROTECTED = {
@@ -180,24 +179,61 @@ class Updater:
             rel = rel_path.replace("\\", "/")
             return any(rel.startswith(p) for p in PROTECTED)
 
-        # Распаковываем
+        # ── Бэкап только тех файлов, которые будут перезаписаны ─────────────────
+        # Раньше зипали ВЕСЬ app_root (electron/dist/node_modules/...) что
+        # подвисало на минуту+. Теперь бэкапим только реально затрагиваемые файлы.
+        try:
+            BACKUP_DIR.mkdir(exist_ok=True)
+            backup_file = BACKUP_DIR / f"backup_{int(time.time())}.zip"
+            self._log("Создаю резервную копию...")
+
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                members = [m for m in zf.namelist()
+                           if not m.endswith("/") and not is_protected(m)]
+
+            existing = [m for m in members if (app_root / m).is_file()]
+            total_b = len(existing) or 1
+            if progress_cb:
+                progress_cb("backing_up", 0, total_b)
+
+            with zipfile.ZipFile(backup_file, "w", zipfile.ZIP_DEFLATED) as bz:
+                for i, member in enumerate(existing, 1):
+                    src_path = app_root / member
+                    try:
+                        bz.write(src_path, member)
+                    except Exception as e:
+                        self._log(f"Не смог забэкапить {member}: {e}")
+                    if progress_cb:
+                        progress_cb("backing_up", i, total_b)
+        except Exception as e:
+            self._log(f"Предупреждение: не удалось создать бэкап: {e}")
+
+        # ── Распаковываем ──────────────────────────────────────────────────────
         try:
             self._log("Применяю обновление...")
             with zipfile.ZipFile(zip_path, "r") as zf:
-                for member in zf.namelist():
-                    if is_protected(member):
-                        continue
+                members = [m for m in zf.namelist() if not is_protected(m)]
+                total_e = len(members) or 1
+                if progress_cb:
+                    progress_cb("extracting", 0, total_e)
+
+                for i, member in enumerate(members, 1):
                     dest = app_root / member
                     if member.endswith("/"):
                         dest.mkdir(parents=True, exist_ok=True)
-                        continue
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    with zf.open(member) as src, open(dest, "wb") as dst:
-                        shutil.copyfileobj(src, dst)
+                    else:
+                        dest.parent.mkdir(parents=True, exist_ok=True)
+                        with zf.open(member) as src, open(dest, "wb") as dst:
+                            shutil.copyfileobj(src, dst)
+                    if progress_cb:
+                        progress_cb("extracting", i, total_e)
 
             save_local_version(new_version)
             self._log(f"Обновление v{new_version} применено успешно!")
             return True, f"Обновлено до v{new_version}. Перезапустите приложение."
 
+        except PermissionError as e:
+            return False, (f"Файл заблокирован (закройте приложение и попробуйте "
+                           f"снова): {e}")
         except Exception as e:
             return False, f"Ошибка при применении обновления: {e}"
