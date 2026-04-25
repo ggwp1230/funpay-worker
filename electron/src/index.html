@@ -454,81 +454,80 @@
       </div>
     </div>
 
+    <!-- ── Page: Обновления ── -->
+    <div class="page" id="page-update">
+      <div class="page-header">
+        <span class="page-title">Обновления</span>
+      </div>
+
+      <!-- Статус подключения к серверу -->
+      <div class="card" id="upd-server-card">
+        <div class="card-title">Сервер обновлений</div>
+        <div id="upd-server-status" style="color:var(--dim);font-size:13px;margin:10px 0">Не настроен</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+          <button class="btn" onclick="go_updateSettings()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">⚙ Настроить</button>
+          <button class="btn" onclick="checkUpdates()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">↻ Проверить</button>
+        </div>
+      </div>
+
+      <!-- Карточка обновления -->
+      <div class="card" id="upd-available-card" style="display:none;border-color:#00e676">
+        <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div>
+            <div style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Доступно обновление</div>
+            <div style="font-size:20px;font-weight:800;color:#00e676" id="upd-new-ver">—</div>
+            <div style="font-size:11px;color:var(--dim);margin-top:2px">Текущая: <span id="upd-cur-ver">—</span></div>
+          </div>
+          <button id="upd-apply-btn" onclick="applyUpdate()" class="btn" style="background:#00e676;color:#050d12;font-weight:700;font-size:14px;padding:12px 28px">
+            ⬇ Установить
+          </button>
+        </div>
+        <div id="upd-changelog" style="margin-top:12px;font-size:12px;color:var(--muted);white-space:pre-wrap"></div>
+        <div style="margin-top:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
+            <span style="font-size:11px;color:var(--dim)" id="upd-progress-label"></span>
+            <span style="font-size:11px;color:var(--accent)" id="upd-pct"></span>
+          </div>
+          <div style="background:var(--bg3);border-radius:4px;height:6px;overflow:hidden">
+            <div id="upd-bar" style="height:100%;background:var(--accent);width:0%;transition:width .3s;border-radius:4px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Нет обновлений -->
+      <div class="card" id="upd-latest-card" style="display:none">
+        <div style="text-align:center;padding:24px 0;color:var(--dim)">
+          <div style="font-size:32px;margin-bottom:8px">✓</div>
+          <div style="font-weight:600;color:var(--text)">У вас последняя версия</div>
+          <div style="font-size:12px;margin-top:4px" id="upd-local-ver-label"></div>
+        </div>
+      </div>
+
+      <!-- Настройки подключения -->
+      <div class="card" id="upd-settings-card" style="display:none">
+        <div class="card-title" style="margin-bottom:14px">Настройки сервера обновлений</div>
+        <div class="form-group">
+          <label>URL сервера</label>
+          <input type="text" id="upd-url-input" class="form-inp" placeholder="http://your-vps:9000">
+        </div>
+        <div class="form-group" style="margin-top:10px">
+          <label>Токен доступа</label>
+          <input type="password" id="upd-token-input" class="form-inp" placeholder="access_token">
+        </div>
+        <div style="display:flex;gap:8px;margin-top:14px">
+          <button class="btn btn-primary" onclick="saveUpdateServer()">Подключить</button>
+          <button class="btn" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)" onclick="document.getElementById('upd-settings-card').style.display='none'">Отмена</button>
+        </div>
+        <div id="upd-connect-result" style="margin-top:10px;font-size:12px;min-height:16px"></div>
+      </div>
+    </div><!-- /page-update -->
+
   </div><!-- /content -->
 </div><!-- /app -->
 
 <div id="toast"></div>
 
 <script src="renderer.js"></script>
-
-<!-- ── Page: Обновления ── -->
-<div class="page" id="page-update">
-  <div class="page-header">
-    <span class="page-title">Обновления</span>
-  </div>
-
-  <!-- Статус подключения к серверу -->
-  <div class="card" id="upd-server-card">
-    <div class="card-title">Сервер обновлений</div>
-    <div id="upd-server-status" style="color:var(--dim);font-size:13px;margin:10px 0">Не настроен</div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
-      <button class="btn" onclick="go_updateSettings()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">⚙ Настроить</button>
-      <button class="btn" onclick="checkUpdates()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">↻ Проверить</button>
-    </div>
-  </div>
-
-  <!-- Карточка обновления -->
-  <div class="card" id="upd-available-card" style="display:none;border-color:#00e676">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <div>
-        <div style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Доступно обновление</div>
-        <div style="font-size:20px;font-weight:800;color:#00e676" id="upd-new-ver">—</div>
-        <div style="font-size:11px;color:var(--dim);margin-top:2px">Текущая: <span id="upd-cur-ver">—</span></div>
-      </div>
-      <button id="upd-apply-btn" onclick="applyUpdate()" class="btn" style="background:#00e676;color:#050d12;font-weight:700;font-size:14px;padding:12px 28px">
-        ⬇ Установить
-      </button>
-    </div>
-    <div id="upd-changelog" style="margin-top:12px;font-size:12px;color:var(--muted);white-space:pre-wrap"></div>
-    <div style="margin-top:14px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-        <span style="font-size:11px;color:var(--dim)" id="upd-progress-label"></span>
-        <span style="font-size:11px;color:var(--accent)" id="upd-pct"></span>
-      </div>
-      <div style="background:var(--bg3);border-radius:4px;height:6px;overflow:hidden">
-        <div id="upd-bar" style="height:100%;background:var(--accent);width:0%;transition:width .3s;border-radius:4px"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Нет обновлений -->
-  <div class="card" id="upd-latest-card" style="display:none">
-    <div style="text-align:center;padding:24px 0;color:var(--dim)">
-      <div style="font-size:32px;margin-bottom:8px">✓</div>
-      <div style="font-weight:600;color:var(--text)">У вас последняя версия</div>
-      <div style="font-size:12px;margin-top:4px" id="upd-local-ver-label"></div>
-    </div>
-  </div>
-
-  <!-- Настройки подключения -->
-  <div class="card" id="upd-settings-card" style="display:none">
-    <div class="card-title" style="margin-bottom:14px">Настройки сервера обновлений</div>
-    <div class="form-group">
-      <label>URL сервера</label>
-      <input type="text" id="upd-url-input" class="form-inp" placeholder="http://your-vps:9000">
-    </div>
-    <div class="form-group" style="margin-top:10px">
-      <label>Токен доступа</label>
-      <input type="password" id="upd-token-input" class="form-inp" placeholder="access_token">
-    </div>
-    <div style="display:flex;gap:8px;margin-top:14px">
-      <button class="btn btn-primary" onclick="saveUpdateServer()">Подключить</button>
-      <button class="btn" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)" onclick="document.getElementById('upd-settings-card').style.display='none'">Отмена</button>
-    </div>
-    <div id="upd-connect-result" style="margin-top:10px;font-size:12px;min-height:16px"></div>
-  </div>
-</div>
-
 
 <!-- ══════════════════════════════════════════════════════
      ONBOARDING SCREEN (показывается до настройки VPS)
@@ -617,74 +616,6 @@
     </div>
 
     <div class="ob-footer">© 2026 FP Nexus. All rights reserved.</div>
-  </div>
-</div>
-
-<!-- ══════════════════════════════════════════════════════
-     PAGE: Обновления
-     ════════════════════════════════════════════════════ -->
-<div class="page" id="page-update">
-  <div class="page-header">
-    <span class="page-title">Обновления</span>
-  </div>
-
-  <div class="card" id="upd-server-card">
-    <div class="card-title">Сервер</div>
-    <div id="upd-server-status" style="color:var(--dim);font-size:13px;margin:10px 0">Не настроен</div>
-    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-      <button class="btn" onclick="checkUpdates()" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">↻ Проверить</button>
-      <button class="btn" onclick="document.getElementById('upd-settings-card').style.display=''" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">⚙ Настроить</button>
-    </div>
-  </div>
-
-  <div class="card" id="upd-available-card" style="display:none;border-color:#00e676;margin-top:12px">
-    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-      <div>
-        <div style="font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.06em;margin-bottom:4px">Доступно обновление</div>
-        <div style="font-size:22px;font-weight:800;color:#00e676" id="upd-new-ver">—</div>
-        <div style="font-size:11px;color:var(--dim);margin-top:2px">Текущая: <span id="upd-cur-ver">—</span></div>
-      </div>
-      <button id="upd-apply-btn" onclick="applyUpdate()" class="btn"
-        style="background:#00e676;color:#050d12;font-weight:700;font-size:14px;padding:12px 28px">
-        ⬇ Установить
-      </button>
-    </div>
-    <div id="upd-changelog" style="margin-top:12px;font-size:12px;color:var(--muted);white-space:pre-wrap"></div>
-    <div style="margin-top:14px">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px">
-        <span style="font-size:11px;color:var(--dim)" id="upd-progress-label"></span>
-        <span style="font-size:11px;color:var(--accent)" id="upd-pct"></span>
-      </div>
-      <div style="background:var(--bg3);border-radius:4px;height:6px;overflow:hidden">
-        <div id="upd-bar" style="height:100%;background:var(--accent);width:0%;transition:width .3s;border-radius:4px"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="card" id="upd-latest-card" style="display:none;margin-top:12px">
-    <div style="text-align:center;padding:24px 0;color:var(--dim)">
-      <div style="font-size:32px;margin-bottom:8px">✓</div>
-      <div style="font-weight:600;color:var(--text)">У вас последняя версия</div>
-      <div style="font-size:12px;margin-top:4px" id="upd-local-ver-label"></div>
-    </div>
-  </div>
-
-  <div class="card" id="upd-settings-card" style="display:none;margin-top:12px">
-    <div class="card-title" style="margin-bottom:14px">Настройки сервера обновлений</div>
-    <div class="form-group">
-      <label>URL сервера</label>
-      <input type="text" id="upd-url-input" class="form-inp" placeholder="http://your-vps:9000">
-    </div>
-    <div class="form-group" style="margin-top:10px">
-      <label>Токен доступа</label>
-      <input type="password" id="upd-token-input" class="form-inp" placeholder="access_token">
-    </div>
-    <div style="display:flex;gap:8px;margin-top:14px">
-      <button class="btn btn-primary" onclick="saveUpdateServer()">Подключить</button>
-      <button class="btn" style="background:var(--bg3);color:var(--text);border:1px solid var(--border)"
-        onclick="document.getElementById('upd-settings-card').style.display='none'">Отмена</button>
-    </div>
-    <div id="upd-connect-result" style="margin-top:10px;font-size:12px;min-height:16px"></div>
   </div>
 </div>
 
