@@ -6,6 +6,14 @@ from __future__ import annotations
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Принудительно UTF-8 для stdout/stderr — иначе на Windows
+# любой emoji или ✓ в логах валит cp1251 кодек.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 import asyncio
 import threading
 import time
@@ -806,7 +814,8 @@ class FPNexus:
         if not UPDATER_AVAILABLE:
             return False, "Модуль updater не найден"
         try:
-            u = Updater(url.strip(), token.strip())
+            u = Updater(url.strip(), token.strip(),
+                        on_log=lambda m: self.log.add("info", "updater", m))
             ok, err = u.ping()
             if not ok:
                 return False, f"Сервер недоступен: {err or 'нет ответа'}"

@@ -149,7 +149,7 @@ class Updater:
             if actual_hash != expected_hash:
                 tmp_path.unlink(missing_ok=True)
                 return False, "Ошибка целостности файла (SHA256 не совпадает)"
-            self._log("Хэш файла проверен ✓")
+            self._log("Хэш файла проверен")
 
         # Применяем обновление
         try:
