@@ -5,10 +5,13 @@ FunPay Bot — Update Server
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import os
+import re
 import shutil
 import time
+import zipfile
 from pathlib import Path
 from typing import Optional
 
@@ -27,9 +30,13 @@ OTP_DIR      = Path("otps")
 OTP_DIR.mkdir(exist_ok=True)
 TOKENS_DIR   = Path("tokens")
 TOKENS_DIR.mkdir(exist_ok=True)
+PLUGINS_DIR  = Path("plugins")
+PLUGINS_DIR.mkdir(exist_ok=True)
 
 META_FILE    = UPDATES_DIR / "meta.json"
 CURRENT_ZIP  = UPDATES_DIR / "current.zip"
+
+PLUGIN_ID_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 
 OTP_TTL      = 300   # 5 минут
 TOKEN_TTL    = 86400 * 30  # 30 дней
@@ -186,6 +193,131 @@ def delete_update(x_admin_token: Optional[str] = Header(None)):
     save_meta({"version": "0.0.0", "changelog": "", "uploaded_at": 0, "size": 0, "sha256": ""})
     return {"ok": True}
 
+# ── Plugins helpers ────────────────────────────────────────────────────────────
+
+def _plugin_paths(plugin_id: str) -> tuple[Path, Path]:
+    return PLUGINS_DIR / f"{plugin_id}.zip", PLUGINS_DIR / f"{plugin_id}.json"
+
+def _read_plugin_json(zip_bytes: bytes) -> dict:
+    """Извлекает plugin.json из переданного zip-архива."""
+    try:
+        zf = zipfile.ZipFile(io.BytesIO(zip_bytes), "r")
+    except zipfile.BadZipFile:
+        raise HTTPException(400, "Файл не является корректным zip-архивом")
+    with zf:
+        try:
+            raw = zf.read("plugin.json")
+        except KeyError:
+            raise HTTPException(400, "В архиве нет plugin.json в корне")
+        try:
+            return json.loads(raw)
+        except Exception as e:
+            raise HTTPException(400, f"plugin.json не парсится: {e}")
+
+def _validate_plugin_meta(meta: dict) -> dict:
+    pid = str(meta.get("id", "")).strip()
+    if not PLUGIN_ID_RE.match(pid):
+        raise HTTPException(400,
+            "id должен быть [a-z0-9_-], 2..64 символа")
+    if not meta.get("name"):
+        raise HTTPException(400, "name обязателен")
+    if not meta.get("version"):
+        raise HTTPException(400, "version обязателен")
+    return {
+        "id": pid,
+        "name": str(meta["name"]),
+        "version": str(meta["version"]),
+        "description": str(meta.get("description", "")),
+        "author": str(meta.get("author", "")),
+        "hooks": list(meta.get("hooks") or []),
+        "config_schema": list(meta.get("config_schema") or []),
+    }
+
+def list_plugins() -> list[dict]:
+    out = []
+    for json_path in sorted(PLUGINS_DIR.glob("*.json")):
+        try:
+            out.append(json.loads(json_path.read_text()))
+        except Exception:
+            continue
+    return out
+
+# ── Plugin endpoints ───────────────────────────────────────────────────────────
+
+@app.post("/admin/plugins/upload")
+async def admin_plugin_upload(
+    file: UploadFile = File(...),
+    x_admin_token: Optional[str] = Header(None),
+):
+    """Загрузка плагина. Метаданные читаются из plugin.json внутри zip."""
+    require_admin(x_admin_token)
+    if not file.filename or not file.filename.endswith(".zip"):
+        raise HTTPException(400, "Нужен .zip файл")
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(400, "Пустой файл")
+
+    plugin_json = _read_plugin_json(raw)
+    meta = _validate_plugin_meta(plugin_json)
+
+    zip_path, json_path = _plugin_paths(meta["id"])
+    zip_path.write_bytes(raw)
+    meta["size"] = len(raw)
+    meta["sha256"] = hashlib.sha256(raw).hexdigest()
+    meta["uploaded_at"] = time.time()
+    json_path.write_text(json.dumps(meta, ensure_ascii=False, indent=2))
+    return {"ok": True, "plugin": meta}
+
+@app.get("/admin/plugins")
+def admin_plugin_list(x_admin_token: Optional[str] = Header(None)):
+    require_admin(x_admin_token)
+    return {"plugins": list_plugins()}
+
+@app.delete("/admin/plugins/{plugin_id}")
+def admin_plugin_delete(plugin_id: str,
+                        x_admin_token: Optional[str] = Header(None)):
+    require_admin(x_admin_token)
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    zip_path, json_path = _plugin_paths(plugin_id)
+    zip_path.unlink(missing_ok=True)
+    json_path.unlink(missing_ok=True)
+    return {"ok": True}
+
+@app.get("/plugins")
+def public_plugin_list(x_token: Optional[str] = Header(None)):
+    valid, data = validate_fp_token(x_token or "")
+    if not valid:
+        raise HTTPException(403, data.get("error", "Invalid access token"))
+    return {"plugins": list_plugins()}
+
+@app.get("/plugins/{plugin_id}/meta")
+def public_plugin_meta(plugin_id: str,
+                       x_token: Optional[str] = Header(None)):
+    valid, data = validate_fp_token(x_token or "")
+    if not valid:
+        raise HTTPException(403, data.get("error", "Invalid access token"))
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    _, json_path = _plugin_paths(plugin_id)
+    if not json_path.exists():
+        raise HTTPException(404, "Плагин не найден")
+    return json.loads(json_path.read_text())
+
+@app.get("/plugins/{plugin_id}/download")
+def public_plugin_download(plugin_id: str,
+                           x_token: Optional[str] = Header(None)):
+    valid, data = validate_fp_token(x_token or "")
+    if not valid:
+        raise HTTPException(403, data.get("error", "Invalid access token"))
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    zip_path, _ = _plugin_paths(plugin_id)
+    if not zip_path.exists():
+        raise HTTPException(404, "Плагин не найден")
+    return FileResponse(zip_path, media_type="application/zip",
+                        filename=f"{plugin_id}.zip")
+
 @app.get("/admin", response_class=HTMLResponse)
 def admin_panel():
     meta = load_meta()
@@ -216,8 +348,17 @@ def admin_panel():
   .btn{{display:inline-block;padding:10px 20px;border:none;border-radius:7px;font-size:13px;font-weight:600;cursor:pointer;margin-top:16px;transition:.15s}}
   .btn-primary{{background:var(--accent);color:#050d12}}
   .btn-danger{{background:var(--red);color:#fff;margin-left:8px}}
+  .btn-sm{{padding:5px 10px;font-size:11px;margin-top:0}}
   .btn:hover{{opacity:.85}}
-  #result,#result2{{margin-top:16px;padding:10px 14px;border-radius:7px;font-size:13px;display:none}}
+  .tabs{{display:flex;gap:6px;margin-bottom:20px;border-bottom:1px solid var(--border)}}
+  .tab{{padding:10px 16px;font-size:13px;color:var(--dim);cursor:pointer;border-bottom:2px solid transparent;user-select:none}}
+  .tab.active{{color:var(--accent);border-bottom-color:var(--accent)}}
+  .pane{{display:none}}
+  .pane.active{{display:block}}
+  .plugin-row{{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;background:#0d1117;border:1px solid var(--border);border-radius:7px;margin-bottom:6px;font-size:13px}}
+  .plugin-row .pid{{font-weight:600;color:var(--text)}}
+  .plugin-row .pmeta{{color:var(--dim);font-size:11px;margin-top:2px}}
+  #result,#result2,#result3{{margin-top:16px;padding:10px 14px;border-radius:7px;font-size:13px;display:none}}
   .ok{{background:#00e67622;border:1px solid var(--green);color:var(--green)}}
   .err{{background:#ff3d7122;border:1px solid var(--red);color:var(--red)}}
 </style>
@@ -235,25 +376,45 @@ def admin_panel():
   </div>
 
   <div id="main-section" style="display:none">
-    <div class="meta">
-      <div><b>Текущая версия:</b> <span id="m-ver">{meta['version']}</span></div>
-      <div><b>Размер:</b> <span id="m-size">{size_kb} KB</span></div>
-      <div><b>Загружено:</b> {uploaded}</div>
-      <div><b>Активных токенов:</b> {tokens_count}</div>
-      <div style="margin-top:6px;color:var(--dim);font-size:11px"><b>Changelog:</b> {meta.get('changelog','—')}</div>
+    <div class="tabs">
+      <div class="tab active" data-tab="updates" onclick="switchTab('updates')">Обновления</div>
+      <div class="tab" data-tab="plugins" onclick="switchTab('plugins')">Плагины</div>
     </div>
 
-    <label>Файл обновления (.zip)</label>
-    <input type="file" id="update-file" accept=".zip" />
-    <label>Новая версия</label>
-    <input type="text" id="new-version" placeholder="например: 1.2.0" />
-    <label>Changelog</label>
-    <textarea id="changelog" placeholder="Что изменилось..."></textarea>
-    <div>
-      <button class="btn btn-primary" onclick="uploadUpdate()">⬆ Загрузить обновление</button>
-      <button class="btn btn-danger" onclick="deleteUpdate()">🗑 Удалить</button>
+    <div class="pane active" id="pane-updates">
+      <div class="meta">
+        <div><b>Текущая версия:</b> <span id="m-ver">{meta['version']}</span></div>
+        <div><b>Размер:</b> <span id="m-size">{size_kb} KB</span></div>
+        <div><b>Загружено:</b> {uploaded}</div>
+        <div><b>Активных токенов:</b> {tokens_count}</div>
+        <div style="margin-top:6px;color:var(--dim);font-size:11px"><b>Changelog:</b> {meta.get('changelog','—')}</div>
+      </div>
+
+      <label>Файл обновления (.zip)</label>
+      <input type="file" id="update-file" accept=".zip" />
+      <label>Новая версия</label>
+      <input type="text" id="new-version" placeholder="например: 1.2.0" />
+      <label>Changelog</label>
+      <textarea id="changelog" placeholder="Что изменилось..."></textarea>
+      <div>
+        <button class="btn btn-primary" onclick="uploadUpdate()">⬆ Загрузить обновление</button>
+        <button class="btn btn-danger" onclick="deleteUpdate()">🗑 Удалить</button>
+      </div>
+      <div id="result2"></div>
     </div>
-    <div id="result2"></div>
+
+    <div class="pane" id="pane-plugins">
+      <div style="font-size:12px;color:var(--dim);margin-bottom:10px">
+        Загрузи zip с <code>plugin.json</code> в корне — метаданные читаются автоматически.
+      </div>
+      <div id="plugin-list" style="margin-bottom:18px"></div>
+      <label>Файл плагина (.zip)</label>
+      <input type="file" id="plugin-file" accept=".zip" />
+      <div>
+        <button class="btn btn-primary" onclick="uploadPlugin()">⬆ Загрузить плагин</button>
+      </div>
+      <div id="result3"></div>
+    </div>
   </div>
 </div>
 <script>
@@ -264,7 +425,51 @@ async function authCheck() {{
   if (r.ok) {{
     document.getElementById('auth-section').style.display = 'none';
     document.getElementById('main-section').style.display = 'block';
+    refreshPlugins();
   }} else {{ showResult('result', 'Неверный токен', false); }}
+}}
+function switchTab(name) {{
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  document.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.id === 'pane-' + name));
+  if (name === 'plugins') refreshPlugins();
+}}
+async function refreshPlugins() {{
+  const r = await fetch('/admin/plugins', {{headers:{{'x-admin-token':_token}}}});
+  const wrap = document.getElementById('plugin-list');
+  if (!r.ok) {{ wrap.innerHTML = '<div class="err" style="display:block">Ошибка загрузки</div>'; return; }}
+  const d = await r.json();
+  if (!d.plugins.length) {{ wrap.innerHTML = '<div style="color:var(--dim);font-size:12px;padding:8px 0">Пока нет загруженных плагинов</div>'; return; }}
+  wrap.innerHTML = d.plugins.map(p => `
+    <div class="plugin-row">
+      <div>
+        <div class="pid">${{p.name}} <span style="color:var(--dim);font-weight:400">v${{p.version}}</span></div>
+        <div class="pmeta">${{p.id}} · ${{p.author||'—'}} · ${{Math.round((p.size||0)/1024)}} KB</div>
+        ${{p.description ? `<div class="pmeta" style="color:var(--text);margin-top:4px">${{p.description}}</div>` : ''}}
+      </div>
+      <button class="btn btn-danger btn-sm" onclick="deletePlugin('${{p.id}}')">Удалить</button>
+    </div>
+  `).join('');
+}}
+async function uploadPlugin() {{
+  const file = document.getElementById('plugin-file').files[0];
+  if (!file) {{ showResult('result3', 'Выберите zip файл', false); return; }}
+  const fd = new FormData();
+  fd.append('file', file);
+  showResult('result3', 'Загружаю...', true);
+  const r = await fetch('/admin/plugins/upload', {{method:'POST',headers:{{'x-admin-token':_token}},body:fd}});
+  const d = await r.json();
+  if (r.ok) {{
+    showResult('result3', `Загружен ${{d.plugin.name}} v${{d.plugin.version}}`, true);
+    document.getElementById('plugin-file').value = '';
+    refreshPlugins();
+  }} else {{ showResult('result3', d.detail||'Ошибка', false); }}
+}}
+async function deletePlugin(id) {{
+  if (!confirm('Удалить плагин ' + id + '?')) return;
+  const r = await fetch('/admin/plugins/' + encodeURIComponent(id), {{
+    method:'DELETE', headers:{{'x-admin-token':_token}}
+  }});
+  if (r.ok) refreshPlugins();
 }}
 async function uploadUpdate() {{
   const file = document.getElementById('update-file').files[0];
