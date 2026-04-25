@@ -173,25 +173,11 @@ crontab /tmp/crontab_tmp || true
 rm -f /tmp/crontab_tmp
 echo -e "  ${GREEN}Авто-обновления каждые 30 мин${RESET}"
 
-# ── Остановка старого контейнера ──────────────────────────────────────────────
-echo -e "\nОстанавливаю старый контейнер..."
-docker stop "${APP_NAME}" 2>/dev/null || true
-docker rm "${APP_NAME}" 2>/dev/null || true
-
-# ── Скачиваем образ ───────────────────────────────────────────────────────────
-echo -e "\nСкачиваю Docker образ (${VERSION})..."
-if docker pull "${IMAGE}:${VERSION}" 2>/dev/null; then
-  echo -e "${GREEN}${IMAGE}:${VERSION}${RESET}"
-else
-  # Если образ недоступен — собираем минимальный образ на месте
-  echo -e "${YELLOW}Образ из registry недоступен. Собираю локально...${RESET}"
-  build_local_image
-fi
-
 # ── Функция локальной сборки (fallback) ───────────────────────────────────────
 build_local_image() {
+  echo -e "  ${YELLOW}Собираю минимальный образ локально...${RESET}"
   cat > "${APP_DIR}/Dockerfile" << 'DOCKERFILE'
-FROM python:3.11-slim
+FROM mirror.gcr.io/library/python:3.11-slim
 WORKDIR /app
 RUN pip install --no-cache-dir fastapi uvicorn requests beautifulsoup4 lxml requests-toolbelt
 COPY worker_main.py /app/main.py
@@ -199,7 +185,6 @@ EXPOSE 8000
 CMD ["python", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
 DOCKERFILE
 
-  # Минимальный worker
   cat > "${APP_DIR}/worker_main.py" << 'PYEOF'
 import os, time
 from fastapi import FastAPI
@@ -218,9 +203,24 @@ def status():
     return {"status": "running", "version": os.environ.get("APP_VERSION","1.0.0"), "uptime": int(time.time()-START_TIME)}
 PYEOF
 
-  docker build -q -t "${IMAGE}:${VERSION}" "${APP_DIR}" 2>/dev/null
-  echo -e "${GREEN}Локальный образ собран${RESET}"
+  docker build -t "${IMAGE}:${VERSION}" "${APP_DIR}"
+  echo -e "  ${GREEN}Локальный образ собран${RESET}"
 }
+
+# ── Остановка старого контейнера ──────────────────────────────────────────────
+echo -e "\nОстанавливаю старый контейнер..."
+docker stop "${APP_NAME}" 2>/dev/null || true
+docker rm "${APP_NAME}" 2>/dev/null || true
+
+# ── Скачиваем образ ───────────────────────────────────────────────────────────
+echo -e "\nСкачиваю Docker образ (${VERSION})..."
+if docker pull "${IMAGE}:${VERSION}" 2>/dev/null; then
+  echo -e "${GREEN}${IMAGE}:${VERSION}${RESET}"
+else
+  # Если образ недоступен — собираем минимальный образ на месте
+  echo -e "${YELLOW}Образ из registry недоступен. Собираю локально...${RESET}"
+  build_local_image
+fi
 
 # ── Запуск ────────────────────────────────────────────────────────────────────
 echo -e "\nЗапускаю Worker..."
