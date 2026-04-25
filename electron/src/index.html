@@ -574,10 +574,8 @@
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
         </button>
       </div>
-      <div id="ob-vps-host-wrap" style="margin-top:10px">
-        <div class="ob-field-label">VPS HOST (опционально)</div>
-        <input id="ob-host" type="text" class="ob-input" placeholder="91.200.13.244 или auto" value="http://funpaybot.duckdns.org:9000">
-      </div>
+      <!-- ob-host скрыт — хост захардкожен -->
+      <input id="ob-host" type="hidden" value="http://funpaybot.duckdns.org:9000">
       <div id="ob-error" class="ob-error"></div>
       <button id="ob-connect-btn" class="ob-btn-primary" onclick="obConnect()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
