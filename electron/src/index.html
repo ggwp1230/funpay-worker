@@ -2,20 +2,16 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:8765 ws://127.0.0.1:8765 https://fonts.googleapis.com https://fonts.gstatic.com">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:8765 ws://127.0.0.1:8765">
 <title>FP Nexus</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;700&family=Syne:wght@400;600;800&display=swap" rel="stylesheet">
-<style>
-/* Fallback: если Syne не загрузился (нет интернета) — stat-val отображается системным шрифтом */
-@font-face {
-  font-family: 'Syne';
-  src: local('Segoe UI Bold'), local('SegoeUI-Bold'), local('Arial Bold'), local('Helvetica Bold');
-  font-weight: 800;
-  font-display: swap;
-}
-</style>
 <link rel="stylesheet" href="styles.css">
+<script>
+  // Применяем тему как можно раньше — чтобы не было FOUC при перезагрузке
+  (function() {
+    var t = localStorage.getItem('fpn_theme') || 'dark';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
 </head>
 <body>
 
@@ -41,6 +37,7 @@
   <div class="tb-btns">
     <!-- WS connection indicator -->
     <div id="ws-indicator" title="WebSocket соединение с бэкендом" style="margin-right:6px;align-self:center;"></div>
+    <button class="tb-theme" id="theme-toggle" onclick="toggleTheme()" title="Сменить тему"><span id="theme-icon">🌙</span></button>
     <button class="tb-btn" onclick="electron.minimize()" title="Свернуть">─</button>
     <button class="tb-btn" onclick="electron.maximize()" title="Развернуть">□</button>
     <button class="tb-btn close" onclick="electron.close()" title="Свернуть в трей">✕</button>
