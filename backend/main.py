@@ -859,11 +859,17 @@ class FPNexus:
         self._update_progress = {"status": "downloading", "pct": 0}
         self.log.add("info", "updater", "Начинаю загрузку обновления...")
 
-        def on_progress(done, total):
+        def on_progress(stage, done, total):
             pct = int(done / total * 100) if total else 0
-            self._update_progress = {"status": "downloading", "pct": pct, "done": done, "total": total}
+            self._update_progress = {
+                "status": stage, "pct": pct, "done": done, "total": total
+            }
 
-        ok, msg = self._updater.download_and_apply(progress_cb=on_progress)
+        try:
+            ok, msg = self._updater.download_and_apply(progress_cb=on_progress)
+        except Exception as e:
+            ok, msg = False, f"Сбой обновления: {e}"
+
         if ok:
             self._update_progress = {"status": "done", "pct": 100}
             self._update_available = False
