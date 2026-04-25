@@ -561,13 +561,14 @@ async function obConnect() {
   btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Подключение...';
   errEl.textContent = '';
 
-  // Вычисляем URL: токен fp_<hash> — хост берём из поля или определяем автоматически
-  const hostInput = document.getElementById('ob-host').value.trim();
-  let url = hostInput || '';
+  // URL сервера обновлений (захардкожен, ob-host используется только если задан явно)
+  const DEFAULT_UPDATE_URL = 'http://funpaybot.duckdns.org:9000';
+  const hostInput = (document.getElementById('ob-host')?.value || '').trim();
+  const url = hostInput || DEFAULT_UPDATE_URL;
 
   // Пробуем подключиться через бэкенд
   const d = await apiPost('/api/update/connect', {
-    url: url || 'auto',
+    url: url,
     token: token
   });
 
