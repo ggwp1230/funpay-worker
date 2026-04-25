@@ -25,6 +25,13 @@ except ImportError:
     UPDATER_AVAILABLE = False
     def get_local_version(): return '0.0.0'
 
+try:
+    from plugin_system import PluginManager
+    PLUGINS_AVAILABLE = True
+except ImportError:
+    PLUGINS_AVAILABLE = False
+    PluginManager = None  # type: ignore
+
 import json
 import logging
 import base64
@@ -86,6 +93,10 @@ DEFAULT_CONFIG = {
         "url": "",
         "token": "",
         "auto_check": True,
+    },
+    "plugins": {
+        "enabled": [],
+        "config": {},
     },
 }
 
@@ -350,6 +361,49 @@ class FPNexus:
         self._response_cooldowns: Dict[int, float] = {}
         self._RESPONSE_COOLDOWN = 60  # секунд между авто-ответами в одном чате
 
+        # Плагины
+        self.plugins: Optional[Any] = None
+        if PLUGINS_AVAILABLE and PluginManager is not None:
+            try:
+                plugins_dir = Path(__file__).parent / "plugins_data"
+                plugins_dir.mkdir(parents=True, exist_ok=True)
+                self.plugins = PluginManager(
+                    plugins_dir=plugins_dir,
+                    get_config=load_config,
+                    save_config=save_config,
+                    send_message_fn=self._plugin_send_message,
+                    log_event=self.log.add,
+                )
+                # Грузим то, что включено в конфиге, прямо на старте.
+                self.plugins.load_all_enabled()
+            except Exception as e:
+                logger.exception("PluginManager init failed: %s", e)
+                self.log.add("error", "plugins",
+                             f"PluginManager не инициализирован: {e}")
+                self.plugins = None
+
+    def _plugin_send_message(self, chat_id: int, text: str,
+                             chat_name: Optional[str] = None,
+                             interlocutor_id: Optional[int] = None,
+                             _from_plugin: Optional[str] = None) -> bool:
+        """Адаптер для PluginContext.send_message."""
+        if not self.account or not self.account.is_initiated:
+            self.log.add("warning", f"plugin:{_from_plugin or '?'}",
+                         "send_message пока недоступен — бот не подключён")
+            return False
+        try:
+            self.account.send_message(
+                chat_id=chat_id, text=text,
+                chat_name=chat_name,
+                interlocutor_id=interlocutor_id,
+            )
+            self.stats.inc("messages_sent")
+            return True
+        except Exception as e:
+            self.log.add("error", f"plugin:{_from_plugin or '?'}",
+                         f"send_message упал: {e}")
+            return False
+
     @property
     def status(self) -> str:
         return self._status
@@ -592,6 +646,17 @@ class FPNexus:
                 self._auto_response(msg, cfg)
             if cfg.get("greeting", {}).get("enabled"):
                 self._greeting(msg, cfg)
+            # Плагины — сначала on_message, ответы плагинов отправляем сразу
+            if self.plugins is not None:
+                replies = self.plugins.dispatch_message(msg)
+                for reply in replies:
+                    self._plugin_send_message(
+                        chat_id=msg.chat_id,
+                        text=reply,
+                        chat_name=msg.chat_name,
+                        interlocutor_id=msg.author_id,
+                        _from_plugin="<reply>",
+                    )
 
         elif isinstance(event, NewOrderEvent):
             order = event.order
@@ -622,6 +687,9 @@ class FPNexus:
                     tg_notify(f'🛒 Новый заказ от {buyer}\n💰 {price} {currency}\n{title}', cfg)
                 )
             )
+            # Плагины — реакция на оплаченный заказ
+            if self.plugins is not None:
+                self.plugins.dispatch_order_paid(order)
 
         elif isinstance(event, OrderStatusChangedEvent):
             order = event.order
@@ -1119,6 +1187,106 @@ def update_apply():
 @app.get("/api/update/progress")
 def update_progress():
     return bot._update_progress or {"status": "idle"}
+
+
+# ─── Plugin routes ────────────────────────────────────────────────────────────
+
+class PluginIdBody(BaseModel):
+    id: str
+
+class PluginToggleBody(BaseModel):
+    id: str
+    enabled: bool
+
+def _vps_session() -> tuple[str, str, dict]:
+    """Возвращает (url, token, headers) для походов на сервер обновлений."""
+    cfg = load_config()
+    ucfg = cfg.get("update_server") or {}
+    url = (ucfg.get("url") or "").rstrip("/")
+    token = (ucfg.get("token") or "").strip()
+    if not url or not token:
+        raise HTTPException(400, "Сервер обновлений не настроен")
+    return url, token, {"X-Token": token}
+
+def _require_plugins() -> Any:
+    if bot.plugins is None:
+        raise HTTPException(503, "Подсистема плагинов недоступна")
+    return bot.plugins
+
+@app.get("/api/plugins/installed")
+def plugins_installed():
+    return {"plugins": _require_plugins().list_installed()}
+
+@app.get("/api/plugins/store")
+def plugins_store():
+    """Список плагинов с VPS."""
+    import requests
+    url, _, headers = _vps_session()
+    try:
+        r = requests.get(f"{url}/plugins", headers=headers, timeout=15)
+    except Exception as e:
+        raise HTTPException(502, f"VPS недоступен: {e}")
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text[:200])
+    return r.json()
+
+@app.post("/api/plugins/install")
+def plugins_install(body: PluginIdBody):
+    import requests
+    pm = _require_plugins()
+    url, _, headers = _vps_session()
+    try:
+        r = requests.get(f"{url}/plugins/{body.id}/download",
+                         headers=headers, timeout=60)
+    except Exception as e:
+        raise HTTPException(502, f"VPS недоступен: {e}")
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text[:200])
+    try:
+        meta = pm.install_zip(r.content)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True, "plugin": meta}
+
+@app.post("/api/plugins/uninstall")
+def plugins_uninstall(body: PluginIdBody):
+    pm = _require_plugins()
+    try:
+        pm.uninstall(body.id)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+@app.post("/api/plugins/toggle")
+def plugins_toggle(body: PluginToggleBody):
+    pm = _require_plugins()
+    try:
+        pm.set_enabled(body.id, body.enabled)
+    except (ValueError, FileNotFoundError) as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(500, f"Не удалось загрузить плагин: {e}")
+    return {"ok": True}
+
+@app.get("/api/plugins/{plugin_id}/config")
+def plugins_get_config(plugin_id: str):
+    pm = _require_plugins()
+    return {"config": pm.get_config(plugin_id)}
+
+@app.post("/api/plugins/{plugin_id}/config")
+def plugins_set_config(plugin_id: str, values: dict):
+    pm = _require_plugins()
+    try:
+        pm.set_config(plugin_id, values)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+@app.post("/api/plugins/reload")
+def plugins_reload():
+    pm = _require_plugins()
+    pm.reload_all()
+    return {"ok": True}
 
 
 if __name__ == "__main__":

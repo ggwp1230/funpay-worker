@@ -173,6 +173,7 @@ class Updater:
             "backend/backup",
             "backend/FunPayAPI",
             "backend/version.json",
+            "backend/plugins_data",
         }
 
         def is_protected(rel_path: str) -> bool:
