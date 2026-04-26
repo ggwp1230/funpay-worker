@@ -76,10 +76,38 @@ def require_admin(token: Optional[str]):
     if token != ADMIN_TOKEN:
         raise HTTPException(403, "Invalid admin token")
 
-def save_token(token: str, ip: str = "", version: str = "1.0.0"):
-    """Сохраняет fp_ токен на диск."""
-    data = {"token": token, "ip": ip, "version": version, "created_at": time.time()}
+def save_token(token: str, ip: str = "", version: str = "1.0.0", worker_url: str = ""):
+    """Сохраняет fp_ токен на диск.
+    worker_url — публичный URL VPS-воркера юзера (http://IP:PORT). Используется
+    в /api/vps/lookup, чтобы Electron-приложение могло подтянуть адрес VPS
+    по одному только токену (без ввода вручную)."""
+    data = {
+        "token": token,
+        "ip": ip,
+        "worker_url": (worker_url or "").rstrip("/"),
+        "version": version,
+        "created_at": time.time(),
+    }
     (TOKENS_DIR / f"{token}.json").write_text(json.dumps(data))
+
+
+def update_token_url(token: str, worker_url: str) -> bool:
+    """Обновляет worker_url у уже выданного токена (например при переезде
+    юзера на другой VPS — повторный install.sh подхватит тот же токен,
+    если юзер перенёс tokens.json, и обновит URL)."""
+    if not worker_url:
+        return False
+    token_file = TOKENS_DIR / f"{token}.json"
+    if not token_file.exists():
+        return False
+    try:
+        data = json.loads(token_file.read_text())
+        data["worker_url"] = worker_url.rstrip("/")
+        data["updated_at"] = time.time()
+        token_file.write_text(json.dumps(data))
+        return True
+    except Exception:
+        return False
 
 def validate_fp_token(token: str) -> tuple[bool, dict]:
     """Проверяет fp_ токен. Возвращает (valid, data)."""
@@ -128,9 +156,15 @@ def ping():
 # ── VPS регистрация через OTP ─────────────────────────────────────────────────
 
 @app.post("/api/vps/register")
-def vps_register(data: dict):
+def vps_register(data: dict, request: Request):
     otp = data.get("otp", "").upper().strip()
-    ip  = data.get("ip", "")
+    ip  = (data.get("ip") or "").strip()
+    # install.sh передаёт worker_url (http://IP:PORT). Если юзер не передал —
+    # пытаемся собрать из ip+port.
+    worker_url = (data.get("worker_url") or "").strip().rstrip("/")
+    if not worker_url and ip:
+        port = str(data.get("port") or 8000)
+        worker_url = f"http://{ip}:{port}"
     otp_file = OTP_DIR / f"{otp}.json"
 
     if not otp_file.exists():
@@ -151,9 +185,43 @@ def vps_register(data: dict):
     # Генерируем fp_ токен и сохраняем
     token = "fp_" + hashlib.sha256(f"{otp}{time.time()}".encode()).hexdigest()[:32]
     meta  = load_meta()
-    save_token(token, ip=ip, version=meta["version"])
+    save_token(token, ip=ip, version=meta["version"], worker_url=worker_url)
 
-    return {"token": token, "version": meta["version"]}
+    return {"token": token, "version": meta["version"], "worker_url": worker_url}
+
+
+@app.post("/api/vps/update_url")
+def vps_update_url(data: dict, request: Request):
+    """install.sh может вызвать это вместо register, если у пользователя уже
+    есть рабочий токен (например он переустанавливает воркер на другом VPS,
+    но хочет сохранить тот же fp-токен в Electron-приложении)."""
+    token = (data.get("token") or "").strip()
+    worker_url = (data.get("worker_url") or "").strip().rstrip("/")
+    valid, _ = validate_fp_token(token)
+    if not valid:
+        raise HTTPException(404, "Токен не найден или истёк")
+    ok = update_token_url(token, worker_url)
+    return {"ok": ok, "worker_url": worker_url}
+
+
+@app.get("/api/vps/lookup")
+def vps_lookup(token: str = ""):
+    """Electron-приложение шлёт сюда fp-токен и получает адрес VPS-воркера
+    юзера. Так юзер вводит ОДИН раз только токен — приложение само подтянет URL.
+    Не требует Authorization-заголовков: токен сам по себе является аутентификацией."""
+    valid, data = validate_fp_token(token)
+    if not valid:
+        raise HTTPException(404, data.get("error", "Token not found"))
+    url = (data.get("worker_url") or "").strip()
+    if not url:
+        # Совместимость со старыми токенами (выданными до этого PR'а): соберём
+        # URL по сохранённому ip и стандартному порту 8000.
+        ip = (data.get("ip") or "").strip()
+        if ip:
+            url = f"http://{ip}:8000"
+    if not url:
+        raise HTTPException(404, "URL не сохранён для этого токена. Перезапустите install.sh на VPS.")
+    return {"ok": True, "worker_url": url}
 
 @app.post("/api/vps/auto_register")
 def vps_auto_register(request: Request):

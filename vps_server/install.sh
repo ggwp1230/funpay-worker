@@ -128,9 +128,10 @@ SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
   || hostname -I | awk '{print $1}')
 OS_INFO=$(. /etc/os-release && echo "$PRETTY_NAME")
 
+WORKER_URL="http://${SERVER_IP}:${PORT}"
 REG_RESP=$(curl -s --max-time 15 -X POST "${API_URL}/api/vps/register" \
   -H "Content-Type: application/json" \
-  -d "{\"otp\":\"${OTP_CODE}\",\"ip\":\"${SERVER_IP}\",\"os\":\"${OS_INFO}\",\"docker\":\"${DOCKER_VER}\"}" \
+  -d "{\"otp\":\"${OTP_CODE}\",\"ip\":\"${SERVER_IP}\",\"port\":\"${PORT}\",\"worker_url\":\"${WORKER_URL}\",\"os\":\"${OS_INFO}\",\"docker\":\"${DOCKER_VER}\"}" \
   2>/dev/null || echo '{"error":"no_connection"}')
 
 TOKEN=$(echo "$REG_RESP" | grep -oP '"token"\s*:\s*"\K[^"]+' || true)
