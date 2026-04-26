@@ -726,6 +726,13 @@ async function obConnect() {
   localStorage.setItem('ob_mode', 'vps');
   toast('VPS подключён', 'ok');
 
+  // Тот же fp-токен валиден и для OTA-сервера (его выдал центральный сервер
+  // обновлений). Молча привязываем — пользователь не должен ещё раз вводить
+  // те же данные на странице «Обновления».
+  try {
+    apiLocalPost('/api/update/connect', { url: CENTRAL_API, token });
+  } catch (_) {}
+
   // Проверяем — может быть golden_key уже сохранён на VPS (например после
   // переустановки приложения). В таком случае скипаем шаг ввода ключа.
   if (probe.data && probe.data.has_key) {
@@ -797,6 +804,18 @@ async function obConnectDocker() {
   }
 }
 
+async function _ensureOtaConfigured(token) {
+  // Если у локального бэкенда ещё не привязан update-сервер — привязываем
+  // ТЕМ ЖЕ fp-токеном (его выдал центральный сервер, он же = OTA-сервер).
+  // Без этого на странице «Обновления» горит «Не настроен».
+  if (!token) return;
+  try {
+    const s = await apiLocal('/api/update/status');
+    if (s && s.configured) return;
+    await apiLocalPost('/api/update/connect', { url: CENTRAL_API, token });
+  } catch (_) {}
+}
+
 async function showOnboarding() {
   const ob = document.getElementById('onboarding');
   if (!ob) return;
@@ -805,6 +824,8 @@ async function showOnboarding() {
   let configured = false;
   const host  = (localStorage.getItem('ob_host')  || '').trim();
   const token = (localStorage.getItem('ob_token') || '').trim();
+  // Бесшумно подцепляем OTA, если он ещё не привязан (миграция со старых версий).
+  if (token) _ensureOtaConfigured(token);
   if (host && token) {
     try {
       const ctrl = new AbortController();
