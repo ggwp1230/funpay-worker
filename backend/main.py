@@ -72,6 +72,10 @@ logger = logging.getLogger("FPNexus")
 CONFIG_PATH = Path(__file__).parent / "config" / "settings.json"
 CONFIG_PATH.parent.mkdir(exist_ok=True)
 
+# URL VPS по умолчанию — фронт его не показывает и не редактирует. Пользователь
+# вводит только fp_-токен, который получает в Telegram-боте.
+DEFAULT_UPDATE_URL = "http://funpaybot.duckdns.org:9000"
+
 DEFAULT_CONFIG = {
     "golden_key": "",
     "user_agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
@@ -90,7 +94,7 @@ DEFAULT_CONFIG = {
     "telegram_notify": {"enabled": False, "bot_token": "", "chat_id": ""},
     "backup": {"enabled": True, "keep_last": 5},
     "update_server": {
-        "url": "http://funpaybot.duckdns.org:9000",
+        "url": DEFAULT_UPDATE_URL,
         "token": "",
         "auto_check": True,
     },
@@ -878,11 +882,16 @@ class FPNexus:
         return Updater(url, token, on_log=lambda m: self.log.add("info", "updater", m))
 
     def connect_update_server(self, url: str, token: str) -> tuple[bool, str]:
-        """Проверяет подключение к серверу обновлений и сохраняет настройки."""
+        """Проверяет подключение к серверу обновлений и сохраняет настройки.
+
+        Если url пустой — используется URL по умолчанию (см. DEFAULT_UPDATE_URL),
+        потому что фронт намеренно не показывает адрес VPS пользователю.
+        """
         if not UPDATER_AVAILABLE:
             return False, "Модуль updater не найден"
+        url = (url or "").strip() or DEFAULT_UPDATE_URL
         try:
-            u = Updater(url.strip(), token.strip(),
+            u = Updater(url, token.strip(),
                         on_log=lambda m: self.log.add("info", "updater", m))
             ok, err = u.ping()
             if not ok:
@@ -893,7 +902,7 @@ class FPNexus:
                 return False, f"Ошибка токена: {meta['error']}"
             # Сохраняем
             cfg = load_config()
-            cfg["update_server"] = {"url": url.strip(), "token": token.strip(), "auto_check": True}
+            cfg["update_server"] = {"url": url, "token": token.strip(), "auto_check": True}
             save_config(cfg)
             self._updater = u
             self._update_meta = meta
@@ -912,29 +921,9 @@ class FPNexus:
         """Проверяет наличие обновлений."""
         if not self._updater:
             self._updater = self._make_updater()
-        # Если апдейтер не настроен или старый токен не валиден — пробуем
-        # перерегистрироваться на VPS прозрачно для пользователя.
-        if not self._updater:
-            try:
-                _bootstrap_update_server()
-            except Exception:
-                pass
-            self._updater = self._make_updater()
         if not self._updater:
             return {"error": "Сервер обновлений не настроен", "has_update": False}
         has_upd, meta = self._updater.check_update()
-        # Если токен протух — re-bootstrap и повторяем один раз
-        if meta.get("error") and ("ток" in meta["error"].lower() or "403" in meta["error"]):
-            try:
-                cfg = load_config()
-                cfg.setdefault("update_server", {})["token"] = ""
-                save_config(cfg)
-                _bootstrap_update_server()
-                self._updater = self._make_updater()
-                if self._updater:
-                    has_upd, meta = self._updater.check_update()
-            except Exception:
-                pass
         self._update_available = has_upd
         self._update_meta = meta
         if meta.get("error"):
@@ -1188,6 +1177,19 @@ def update_connect(body: ConnectUpdateServerBody):
     ok, msg = bot.connect_update_server(body.url, body.token)
     return {"ok": ok, "message": msg}
 
+@app.post("/api/update/disconnect")
+def update_disconnect():
+    """Снимает fp-токен сервера обновлений (для logout). URL остаётся."""
+    cfg = load_config()
+    ucfg = cfg.get("update_server") or {}
+    ucfg["token"] = ""
+    cfg["update_server"] = {**ucfg, "url": (ucfg.get("url") or DEFAULT_UPDATE_URL)}
+    save_config(cfg)
+    bot._updater = None
+    bot._update_available = False
+    bot._update_meta = {}
+    return {"ok": True}
+
 @app.get("/api/update/status")
 def update_status():
     return bot.get_update_status()
@@ -1309,42 +1311,22 @@ def plugins_reload():
     return {"ok": True}
 
 
-# ─── Bootstrap update server (zero-config) ────────────────────────────────────
-# На первом запуске или если токен потерялся — автоматически
-# получаем fp_-токен с VPS, чтобы обычный пользователь ничего не
-# настраивал руками.
-DEFAULT_UPDATE_URL = "http://funpaybot.duckdns.org:9000"
-
-def _bootstrap_update_server() -> None:
-    cfg = load_config()
-    ucfg = cfg.get("update_server") or {}
-    url = (ucfg.get("url") or "").strip() or DEFAULT_UPDATE_URL
-    token = (ucfg.get("token") or "").strip()
-    if token:
-        # Уже настроено — ничего не делаем
-        if (ucfg.get("url") or "").strip() != url:
-            cfg["update_server"]["url"] = url
-            save_config(cfg)
-        return
+# ─── Default update server URL ────────────────────────────────────────────────
+def _ensure_default_url() -> None:
+    """Подставляет URL по умолчанию, если в config он пустой."""
     try:
-        import requests
-        r = requests.post(f"{url}/api/vps/auto_register", json={}, timeout=8)
-        if r.status_code == 200:
-            data = r.json()
-            new_token = data.get("token")
-            if new_token:
-                cfg["update_server"] = {"url": url, "token": new_token, "auto_check": True}
-                save_config(cfg)
-                print(f"[bootstrap] Update server auto-configured ({url}). Token issued.")
-                return
-        print(f"[bootstrap] auto_register failed: HTTP {r.status_code} {r.text[:120]}")
+        cfg = load_config()
+        ucfg = cfg.get("update_server") or {}
+        if not (ucfg.get("url") or "").strip():
+            cfg.setdefault("update_server", {})["url"] = DEFAULT_UPDATE_URL
+            save_config(cfg)
     except Exception as e:
-        print(f"[bootstrap] auto_register error: {e}")
+        print(f"[startup] _ensure_default_url failed: {e}")
 
 try:
-    _bootstrap_update_server()
+    _ensure_default_url()
 except Exception as _e:
-    print(f"[bootstrap] skipped: {_e}")
+    print(f"[startup] skipped: {_e}")
 
 
 if __name__ == "__main__":

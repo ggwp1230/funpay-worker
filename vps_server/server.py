@@ -145,25 +145,13 @@ def vps_register(data: dict):
 
 @app.post("/api/vps/auto_register")
 def vps_auto_register(request: Request):
-    """Автоматическая выдача fp_-токена клиенту (без OTP).
+    """Эндпоинт отключён.
 
-    Используется приложением на первом запуске, чтобы простой пользователь
-    не настраивал ничего руками. Лимит — один токен на IP за минуту, чтобы
-    не плодить мусор и не давать спамить."""
-    ip = request.client.host if request.client else ""
-    now = time.time()
-    # Дешёвый rate-limit по IP (60 сек)
-    for f in TOKENS_DIR.glob("*.json"):
-        try:
-            d = json.loads(f.read_text())
-            if d.get("ip") == ip and now - d.get("created_at", 0) < 60:
-                return {"token": d["token"], "version": load_meta()["version"]}
-        except Exception:
-            continue
-    token = "fp_" + hashlib.sha256(f"{ip}{now}".encode()).hexdigest()[:32]
-    meta  = load_meta()
-    save_token(token, ip=ip, version=meta["version"])
-    return {"token": token, "version": meta["version"]}
+    Раньше приложение само получало fp_-токен на старте (zero-config), но это
+    позволяло любому в интернете дёргать VPS и получать рабочие токены без
+    ограничений. Теперь fp_-токен выдаёт ТОЛЬКО Telegram-бот после OTP — это
+    гейт доступа к продукту."""
+    raise HTTPException(410, "auto_register отключён — получите fp-токен в Telegram-боте")
 
 @app.get("/api/version")
 def api_version():

@@ -647,28 +647,50 @@ async function obConnectDocker() {
   }
 }
 
-function showOnboarding() {
-  // Сервер обновлений теперь настраивается бэкендом автоматически на старте
-  // (см. _bootstrap_update_server в backend/main.py). Onboarding-экран
-  // больше не нужен — приложение готово к работе сразу после установки.
+async function showOnboarding() {
   const ob = document.getElementById('onboarding');
-  if (ob) ob.style.display = 'none';
+  if (!ob) return;
+  // Спрашиваем у бэкенда — есть ли валидный токен сервера обновлений.
+  // Если есть — onboarding не показываем. Если нет — показываем экран ввода.
+  let configured = false;
+  try {
+    const s = await api('/api/update/status');
+    configured = !!(s && s.configured);
+  } catch (_) { /* бэкенд ещё не готов — покажем onboarding */ }
+  if (configured) {
+    ob.style.display = 'none';
+    return;
+  }
+  ob.style.display = 'flex';
+  setTimeout(() => {
+    const t = document.getElementById('ob-token');
+    if (t) t.focus();
+  }, 300);
 }
 
 // ─── Logout ──────────────────────────────────────────────────────────────────
 async function logout() {
-  if (!confirm('Выйти из FunPay-аккаунта? Бот остановится, golden_key будет удалён — придётся ввести заново в Настройках.')) return;
+  if (!confirm('Выйти? Бот остановится, fp-токен и golden_key будут удалены — нужно будет войти заново.')) return;
   // Останавливаем бота
   try { await api('/api/stop', { method: 'POST' }); } catch(_){}
   // Чистим golden_key из защищённого хранилища Electron
   try { if (window.electron?.keyDelete) await window.electron.keyDelete(); } catch(_){}
-  // На всякий случай чистим старые VPS-флаги в localStorage (legacy)
+  // Чистим fp-токен сервера обновлений (на бэкенде)
+  try { await apiPost('/api/update/disconnect', {}); } catch(_){}
+  // Legacy localStorage (раньше токен лежал тут — на всякий случай чистим)
   localStorage.removeItem('ob_token');
   localStorage.removeItem('ob_mode');
   localStorage.removeItem('ob_host');
-  toast('Вы вышли. Введите golden_key в Настройках.', '');
-  // Перекидываем на страницу настроек
-  setTimeout(() => { try { go('settings'); } catch(_){} }, 400);
+  toast('Вы вышли. Введите fp-токен заново.', '');
+  // Возвращаем onboarding-экран
+  const ob = document.getElementById('onboarding');
+  if (ob) {
+    ob.style.display = 'flex';
+    setTimeout(() => {
+      const t = document.getElementById('ob-token');
+      if (t) { t.value = ''; t.focus(); }
+    }, 200);
+  }
 }
 
 async function deleteGoldenKey() {
