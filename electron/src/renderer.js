@@ -1,6 +1,21 @@
 'use strict';
 // ─── State ──────────────────────────────────────────────────────────────────
-const API_BASE = 'http://127.0.0.1:8765';
+// API_BASE может указывать либо на локальный python-бэкенд (Docker-режим),
+// либо на user-VPS воркер (VPS-режим). Конкретный URL сохранён в localStorage
+// под ключом 'ob_host' после успешного onboarding'а. Если ничего не сохранено
+// — fallback на локальный Electron-бэкенд для обратной совместимости.
+function getApiBase() {
+  try {
+    const h = (localStorage.getItem('ob_host') || '').trim().replace(/\/+$/, '');
+    if (h) return h;
+  } catch (_) {}
+  return 'http://127.0.0.1:8765';
+}
+function getApiToken() {
+  try {
+    return (localStorage.getItem('ob_token') || '').trim();
+  } catch (_) { return ''; }
+}
 let logFilter = 'all';
 let allLogs   = [];
 let ws        = null;
@@ -49,7 +64,10 @@ function showDesktopNotif(title, body) {
 // ─── API helpers ─────────────────────────────────────────────────────────────
 async function api(path, opts = {}) {
   try {
-    const r = await fetch(API_BASE + path, opts);
+    const tok = getApiToken();
+    const headers = Object.assign({}, opts.headers || {});
+    if (tok) headers['X-Token'] = tok;
+    const r = await fetch(getApiBase() + path, Object.assign({}, opts, { headers }));
     return await r.json();
   } catch (e) {
     return { ok: false, message: 'Нет соединения с бэкендом' };
@@ -208,7 +226,12 @@ function connectWS() {
   if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
 
   try {
-    ws = new WebSocket('ws://127.0.0.1:8765/ws/logs');
+    // Преобразуем http(s)://host:port → ws(s)://host:port и добавляем
+    // токен query-параметром (бэкенд проверяет его в ws_logs).
+    const base = getApiBase();
+    const wsUrl = base.replace(/^http/, 'ws') + '/ws/logs';
+    const tok = getApiToken();
+    ws = new WebSocket(tok ? `${wsUrl}?token=${encodeURIComponent(tok)}` : wsUrl);
   } catch (e) {
     ws = null;
     _wsReconnectTimer = setTimeout(connectWS, 3000);
@@ -548,8 +571,9 @@ function obSetMode(mode) {
   document.getElementById('ob-docker-panel').style.display = mode === 'docker' ? '' : 'none';
 }
 
-function obToggleEye(btn) {
-  const input = document.getElementById('ob-token');
+function obToggleEye(btn, inputId) {
+  const input = document.getElementById(inputId || 'ob-token');
+  if (!input) return;
   const isPass = input.type === 'password';
   input.type = isPass ? 'text' : 'password';
   btn.style.opacity = isPass ? '1' : '0.5';
@@ -574,53 +598,118 @@ function obCopyCode(el) {
   });
 }
 
+function obBackToConnect() {
+  document.getElementById('ob-step-connect').style.display = '';
+  document.getElementById('ob-step-key').style.display = 'none';
+}
+
+function _normHost(h) {
+  h = (h || '').trim().replace(/\/+$/, '');
+  if (h && !/^https?:\/\//i.test(h)) h = 'http://' + h;
+  return h;
+}
+
+async function _probeWorker(url, token) {
+  // Проверяем что VPS-воркер живой и токен правильный.
+  // /ping публичный (без токена), /api/status — требует токена.
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(url + '/api/status', {
+      headers: { 'X-Token': token },
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    if (r.status === 401 || r.status === 403) {
+      return { ok: false, message: 'Неверный токен (HTTP ' + r.status + ')' };
+    }
+    if (!r.ok) {
+      return { ok: false, message: 'VPS вернул HTTP ' + r.status };
+    }
+    return { ok: true, data: await r.json() };
+  } catch (e) {
+    return { ok: false, message: 'VPS не отвечает: ' + (e.message || e) };
+  }
+}
+
 async function obConnect() {
+  const host  = _normHost(document.getElementById('ob-host').value);
   const token = document.getElementById('ob-token').value.trim();
   const errEl = document.getElementById('ob-error');
   const btn   = document.getElementById('ob-connect-btn');
 
-  if (!token) { errEl.textContent = 'Введите токен'; return; }
+  if (!host)  { errEl.textContent = 'Введите адрес VPS (URL воркера)'; return; }
+  if (!token) { errEl.textContent = 'Введите fp-токен'; return; }
   if (!token.startsWith('fp_')) {
     errEl.textContent = 'Токен должен начинаться с fp_';
     return;
   }
 
   btn.disabled = true;
-  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Подключение...';
+  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Проверяю VPS...';
   errEl.textContent = '';
 
-  // Onboarding больше не используется — URL берёт бэкенд из своего конфига.
-  const hostInput = (document.getElementById('ob-host')?.value || '').trim();
-  const url = hostInput;
-
-  // Пробуем подключиться через бэкенд
-  const d = await apiPost('/api/update/connect', {
-    url: url,
-    token: token
-  });
+  const probe = await _probeWorker(host, token);
 
   btn.disabled = false;
   btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg> Подключиться к VPS';
 
-  if (d.ok) {
-    // Сохраняем и скрываем onboarding
-    localStorage.setItem('ob_token', token);
-    localStorage.setItem('ob_mode', 'vps');
-    document.getElementById('onboarding').style.display = 'none';
-    toast('VPS подключён!', 'ok');
-    setTimeout(checkUpdates, 1000);
-  } else {
-    // Если сервер не настроен — просто сохраняем токен и входим
-    // (connect endpoint может отсутствовать пока нет update-сервера)
-    if (d.message && d.message.includes('не настроен')) {
-      localStorage.setItem('ob_token', token);
-      localStorage.setItem('ob_mode', 'vps');
-      document.getElementById('onboarding').style.display = 'none';
-      toast('Токен сохранён', 'ok');
-    } else {
-      errEl.textContent = d.message || 'Ошибка подключения';
-    }
+  if (!probe.ok) {
+    errEl.textContent = probe.message;
+    return;
   }
+
+  // Сохраняем — теперь api()/apiPost()/connectWS будут ходить на этот VPS.
+  localStorage.setItem('ob_host', host);
+  localStorage.setItem('ob_token', token);
+  localStorage.setItem('ob_mode', 'vps');
+  toast('VPS подключён', 'ok');
+
+  // Проверяем — может быть golden_key уже сохранён на VPS (например после
+  // переустановки приложения). В таком случае скипаем шаг ввода ключа.
+  if (probe.data && probe.data.has_key) {
+    document.getElementById('onboarding').style.display = 'none';
+    setTimeout(connectWS, 500);
+    setTimeout(updateStatus, 800);
+    return;
+  }
+
+  // Иначе — переход к шагу ввода golden_key.
+  document.getElementById('ob-step-connect').style.display = 'none';
+  document.getElementById('ob-step-key').style.display = '';
+  setTimeout(() => document.getElementById('ob-gk')?.focus(), 200);
+}
+
+async function obSaveKey() {
+  const gk    = document.getElementById('ob-gk').value.trim();
+  const errEl = document.getElementById('ob-key-error');
+  const btn   = document.getElementById('ob-key-btn');
+
+  if (!gk || gk.length < 16) {
+    errEl.textContent = 'golden_key слишком короткий — должно быть 32 символа';
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Запускаю бота...';
+  errEl.textContent = '';
+
+  // POST /api/config с golden_key — VPS-бэкенд сохранит ключ в data-volume
+  // и автоматически вызовет bot.start() (если был остановлен).
+  const d = await apiPost('/api/config', { data: { golden_key: gk } });
+
+  btn.disabled = false;
+  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> Запустить бота';
+
+  if (!d || d.ok === false) {
+    errEl.textContent = (d && d.message) || 'Ошибка сохранения ключа';
+    return;
+  }
+
+  toast('Бот запускается на VPS', 'ok');
+  document.getElementById('onboarding').style.display = 'none';
+  setTimeout(connectWS, 500);
+  setTimeout(updateStatus, 1500);
 }
 
 async function obConnectDocker() {
@@ -650,45 +739,63 @@ async function obConnectDocker() {
 async function showOnboarding() {
   const ob = document.getElementById('onboarding');
   if (!ob) return;
-  // Спрашиваем у бэкенда — есть ли валидный токен сервера обновлений.
-  // Если есть — onboarding не показываем. Если нет — показываем экран ввода.
+  // Если в localStorage уже есть VPS-URL и токен, и VPS-воркер на них живой —
+  // не показываем онбординг (юзер уже подключён). Иначе показываем.
   let configured = false;
-  try {
-    const s = await api('/api/update/status');
-    configured = !!(s && s.configured);
-  } catch (_) { /* бэкенд ещё не готов — покажем onboarding */ }
+  const host  = (localStorage.getItem('ob_host')  || '').trim();
+  const token = (localStorage.getItem('ob_token') || '').trim();
+  if (host && token) {
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      const r = await fetch(host.replace(/\/+$/, '') + '/api/status', {
+        headers: { 'X-Token': token },
+        signal: ctrl.signal,
+      });
+      clearTimeout(t);
+      configured = r.ok;
+    } catch (_) { /* VPS недоступен — попросим юзера ввести заново */ }
+  }
   if (configured) {
     ob.style.display = 'none';
     return;
   }
   ob.style.display = 'flex';
   setTimeout(() => {
-    const t = document.getElementById('ob-token');
+    const t = document.getElementById('ob-host');
     if (t) t.focus();
   }, 300);
 }
 
 // ─── Logout ──────────────────────────────────────────────────────────────────
 async function logout() {
-  if (!confirm('Выйти? Бот остановится, fp-токен и golden_key будут удалены — нужно будет войти заново.')) return;
-  // Останавливаем бота
+  if (!confirm('Выйти? Бот остановится на VPS, golden_key и адрес будут забыты. Чтобы вернуться — введите токен и адрес снова.')) return;
+  // Останавливаем бота на VPS и стираем golden_key с него.
   try { await api('/api/stop', { method: 'POST' }); } catch(_){}
-  // Чистим golden_key из защищённого хранилища Electron
+  try { await apiPost('/api/config', { data: { golden_key: '' } }); } catch(_){}
+  // Чистим локальное состояние Electron-приложения.
   try { if (window.electron?.keyDelete) await window.electron.keyDelete(); } catch(_){}
-  // Чистим fp-токен сервера обновлений (на бэкенде)
-  try { await apiPost('/api/update/disconnect', {}); } catch(_){}
-  // Legacy localStorage (раньше токен лежал тут — на всякий случай чистим)
   localStorage.removeItem('ob_token');
   localStorage.removeItem('ob_mode');
   localStorage.removeItem('ob_host');
-  toast('Вы вышли. Введите fp-токен заново.', '');
+  // Закрываем активный WebSocket — иначе при подключении к другому VPS
+  // connectWS() видит ws.readyState !== CLOSED и не переподключается,
+  // и логи продолжают идти со старого хоста.
+  if (ws) { try { ws.close(); } catch(_){} ws = null; }
+  if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
+  document.getElementById('ws-indicator')?.classList.remove('active');
+  toast('Вы вышли. Введите адрес VPS и токен заново.', '');
   // Возвращаем onboarding-экран
+  obBackToConnect();
   const ob = document.getElementById('onboarding');
   if (ob) {
     ob.style.display = 'flex';
     setTimeout(() => {
-      const t = document.getElementById('ob-token');
-      if (t) { t.value = ''; t.focus(); }
+      ['ob-host', 'ob-token', 'ob-gk'].forEach(id => {
+        const e = document.getElementById(id);
+        if (e) e.value = '';
+      });
+      document.getElementById('ob-host')?.focus();
     }, 200);
   }
 }
