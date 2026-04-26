@@ -632,13 +632,39 @@ async function _probeWorker(url, token) {
   }
 }
 
+// URL центрального сервера обновлений — тут хранятся пары (fp-токен → URL VPS).
+const CENTRAL_API = 'http://funpaybot.duckdns.org:9000';
+
+async function _lookupWorkerUrl(token) {
+  // Спрашиваем у центрального сервера: куда подключаться по этому токену.
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const r = await fetch(
+      CENTRAL_API + '/api/vps/lookup?token=' + encodeURIComponent(token),
+      { signal: ctrl.signal }
+    );
+    clearTimeout(t);
+    if (r.status === 404) {
+      return { ok: false, message: 'Токен не найден. Получите новый: установите worker на VPS через @FPNexusBot.' };
+    }
+    if (!r.ok) {
+      return { ok: false, message: 'Сервер вернул HTTP ' + r.status };
+    }
+    const j = await r.json();
+    const url = (j && j.worker_url || '').trim();
+    if (!url) return { ok: false, message: 'У токена не записан адрес VPS — перезапустите install.sh.' };
+    return { ok: true, url };
+  } catch (e) {
+    return { ok: false, message: 'Сервер обновлений недоступен: ' + (e.message || e) };
+  }
+}
+
 async function obConnect() {
-  const host  = _normHost(document.getElementById('ob-host').value);
   const token = document.getElementById('ob-token').value.trim();
   const errEl = document.getElementById('ob-error');
   const btn   = document.getElementById('ob-connect-btn');
 
-  if (!host)  { errEl.textContent = 'Введите адрес VPS (URL воркера)'; return; }
   if (!token) { errEl.textContent = 'Введите fp-токен'; return; }
   if (!token.startsWith('fp_')) {
     errEl.textContent = 'Токен должен начинаться с fp_';
@@ -646,9 +672,23 @@ async function obConnect() {
   }
 
   btn.disabled = true;
-  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Проверяю VPS...';
+  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Ищу адрес VPS...';
   errEl.textContent = '';
 
+  // 1) Lookup адреса по токену на центральном сервере
+  const lookup = await _lookupWorkerUrl(token);
+  if (!lookup.ok) {
+    btn.disabled = false;
+    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg> Подключиться к VPS';
+    errEl.textContent = lookup.message;
+    return;
+  }
+  const host = _normHost(lookup.url);
+  document.getElementById('ob-host').value = host;
+
+  btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Проверяю VPS...';
+
+  // 2) Проверяем что VPS жив и токен принимается
   const probe = await _probeWorker(host, token);
 
   btn.disabled = false;
@@ -762,7 +802,7 @@ async function showOnboarding() {
   }
   ob.style.display = 'flex';
   setTimeout(() => {
-    const t = document.getElementById('ob-host');
+    const t = document.getElementById('ob-token');
     if (t) t.focus();
   }, 300);
 }
@@ -795,7 +835,7 @@ async function logout() {
         const e = document.getElementById(id);
         if (e) e.value = '';
       });
-      document.getElementById('ob-host')?.focus();
+      document.getElementById('ob-token')?.focus();
     }, 200);
   }
 }

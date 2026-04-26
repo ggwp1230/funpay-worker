@@ -612,13 +612,9 @@
 
     <!-- VPS mode panel -->
     <div class="ob-panel" id="ob-vps-panel">
-      <!-- Шаг 1: подключение к VPS -->
+      <!-- Шаг 1: подключение к VPS — пользователь вводит ТОЛЬКО fp-токен,
+           адрес VPS приложение само подтянет с центрального сервера обновлений. -->
       <div id="ob-step-connect">
-        <div class="ob-field-label">АДРЕС VPS</div>
-        <input id="ob-host" type="text" class="ob-input"
-          placeholder="http://1.2.3.4:8000"
-          style="margin-bottom:12px"
-          onkeydown="if(event.key==='Enter')document.getElementById('ob-token').focus()">
         <div class="ob-field-label">FP-ТОКЕН</div>
         <div class="ob-input-wrap">
           <svg class="ob-input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="m19 8-3.09 3.09M19 8l-2-2m2 2h-3m0 0v3"/></svg>
@@ -629,6 +625,8 @@
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
           </button>
         </div>
+        <!-- ob-host больше не показывается юзеру — заполняется автоматически -->
+        <input id="ob-host" type="hidden" value="">
         <div id="ob-error" class="ob-error"></div>
         <button id="ob-connect-btn" class="ob-btn-primary" onclick="obConnect()">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
