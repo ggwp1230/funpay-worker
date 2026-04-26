@@ -657,17 +657,18 @@ function showOnboarding() {
 
 // ─── Logout ──────────────────────────────────────────────────────────────────
 async function logout() {
-  if (!confirm('Выйти? VPS токен будет удалён, потребуется войти заново.')) return;
+  if (!confirm('Выйти из FunPay-аккаунта? Бот остановится, golden_key будет удалён — придётся ввести заново в Настройках.')) return;
   // Останавливаем бота
-  await api('/api/stop', { method: 'POST' });
-  // Очищаем localStorage (VPS токен)
+  try { await api('/api/stop', { method: 'POST' }); } catch(_){}
+  // Чистим golden_key из защищённого хранилища Electron
+  try { if (window.electron?.keyDelete) await window.electron.keyDelete(); } catch(_){}
+  // На всякий случай чистим старые VPS-флаги в localStorage (legacy)
   localStorage.removeItem('ob_token');
   localStorage.removeItem('ob_mode');
   localStorage.removeItem('ob_host');
-  // Показываем экран входа
-  document.getElementById('onboarding').style.display = 'flex';
-  setTimeout(() => document.getElementById('ob-token').focus(), 300);
-  toast('Вы вышли. Введите новый токен.', '');
+  toast('Вы вышли. Введите golden_key в Настройках.', '');
+  // Перекидываем на страницу настроек
+  setTimeout(() => { try { go('settings'); } catch(_){} }, 400);
 }
 
 async function deleteGoldenKey() {
