@@ -958,9 +958,9 @@ class FPNexus:
     def get_update_status(self) -> dict:
         cfg = load_config()
         ucfg = cfg.get("update_server", {})
+        # URL и токен не светим во фронт — это внутренние детали инфраструктуры.
         return {
             "configured": bool(ucfg.get("url") and ucfg.get("token")),
-            "server_url": ucfg.get("url", ""),
             "has_update": self._update_available,
             "meta": self._update_meta,
             "progress": self._update_progress,

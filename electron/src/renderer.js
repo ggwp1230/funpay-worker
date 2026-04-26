@@ -589,10 +589,9 @@ async function obConnect() {
   btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="animation:spin 1s linear infinite"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg> Подключение...';
   errEl.textContent = '';
 
-  // URL сервера обновлений (захардкожен, ob-host используется только если задан явно)
-  const DEFAULT_UPDATE_URL = 'http://funpaybot.duckdns.org:9000';
+  // Onboarding больше не используется — URL берёт бэкенд из своего конфига.
   const hostInput = (document.getElementById('ob-host')?.value || '').trim();
-  const url = hostInput || DEFAULT_UPDATE_URL;
+  const url = hostInput;
 
   // Пробуем подключиться через бэкенд
   const d = await apiPost('/api/update/connect', {
@@ -693,11 +692,10 @@ async function checkUpdates() {
 function refreshUpdateUI(status) {
   if (!status) return;
 
-  // Server status line
+  // Server status line (URL не показываем — прячем адрес VPS)
   const serverEl = document.getElementById('upd-server-status');
   if (status.configured) {
-    const url = status.server_url || '';
-    serverEl.innerHTML = `<span style="color:var(--green)">● Подключено</span> — <span style="color:var(--dim)">${esc(url)}</span>`;
+    serverEl.innerHTML = `<span style="color:var(--green)">● Подключено</span>`;
   } else {
     serverEl.innerHTML = '<span style="color:var(--red)">● Не настроен</span>';
   }
