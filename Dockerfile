@@ -9,7 +9,10 @@
 # которая в docker-compose.yml монтируется как именованный volume,
 # чтобы переживать обновления.
 
-FROM python:3.11-slim
+# mirror.gcr.io — официальный read-only зеркало Docker Hub от Google.
+# В странах, где docker.io тормозит/блокируется, образ оттуда скачивается
+# нормально. install.sh дополнительно прописывает зеркала в /etc/docker/daemon.json.
+FROM mirror.gcr.io/library/python:3.11-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
