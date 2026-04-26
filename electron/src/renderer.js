@@ -668,7 +668,7 @@ async function logout() {
   localStorage.removeItem('ob_host');
   toast('Вы вышли. Введите golden_key в Настройках.', '');
   // Перекидываем на страницу настроек
-  setTimeout(() => { try { go_settings(); } catch(_){} }, 400);
+  setTimeout(() => { try { go('settings'); } catch(_){} }, 400);
 }
 
 async function deleteGoldenKey() {
