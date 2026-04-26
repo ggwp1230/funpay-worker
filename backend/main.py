@@ -90,7 +90,7 @@ DEFAULT_CONFIG = {
     "telegram_notify": {"enabled": False, "bot_token": "", "chat_id": ""},
     "backup": {"enabled": True, "keep_last": 5},
     "update_server": {
-        "url": "",
+        "url": "http://funpaybot.duckdns.org:9000",
         "token": "",
         "auto_check": True,
     },
@@ -1287,6 +1287,44 @@ def plugins_reload():
     pm = _require_plugins()
     pm.reload_all()
     return {"ok": True}
+
+
+# ─── Bootstrap update server (zero-config) ────────────────────────────────────
+# На первом запуске или если токен потерялся — автоматически
+# получаем fp_-токен с VPS, чтобы обычный пользователь ничего не
+# настраивал руками.
+DEFAULT_UPDATE_URL = "http://funpaybot.duckdns.org:9000"
+
+def _bootstrap_update_server() -> None:
+    cfg = load_config()
+    ucfg = cfg.get("update_server") or {}
+    url = (ucfg.get("url") or "").strip() or DEFAULT_UPDATE_URL
+    token = (ucfg.get("token") or "").strip()
+    if token:
+        # Уже настроено — ничего не делаем
+        if (ucfg.get("url") or "").strip() != url:
+            cfg["update_server"]["url"] = url
+            save_config(cfg)
+        return
+    try:
+        import requests
+        r = requests.post(f"{url}/api/vps/auto_register", json={}, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            new_token = data.get("token")
+            if new_token:
+                cfg["update_server"] = {"url": url, "token": new_token, "auto_check": True}
+                save_config(cfg)
+                print(f"[bootstrap] Update server auto-configured ({url}). Token issued.")
+                return
+        print(f"[bootstrap] auto_register failed: HTTP {r.status_code} {r.text[:120]}")
+    except Exception as e:
+        print(f"[bootstrap] auto_register error: {e}")
+
+try:
+    _bootstrap_update_server()
+except Exception as _e:
+    print(f"[bootstrap] skipped: {_e}")
 
 
 if __name__ == "__main__":

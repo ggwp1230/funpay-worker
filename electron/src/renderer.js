@@ -649,18 +649,11 @@ async function obConnectDocker() {
 }
 
 function showOnboarding() {
-  // Проверяем: уже был вход?
-  const saved = localStorage.getItem('ob_token');
-  if (saved) {
-    document.getElementById('onboarding').style.display = 'none';
-    // Показываем поле хоста если есть сохранённый
-    const host = localStorage.getItem('ob_host');
-    if (host) document.getElementById('ob-host').value = host;
-    return;
-  }
-  // Показываем экран входа
-  document.getElementById('onboarding').style.display = 'flex';
-  setTimeout(() => document.getElementById('ob-token').focus(), 300);
+  // Сервер обновлений теперь настраивается бэкендом автоматически на старте
+  // (см. _bootstrap_update_server в backend/main.py). Onboarding-экран
+  // больше не нужен — приложение готово к работе сразу после установки.
+  const ob = document.getElementById('onboarding');
+  if (ob) ob.style.display = 'none';
 }
 
 // ─── Logout ──────────────────────────────────────────────────────────────────
