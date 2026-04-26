@@ -1027,7 +1027,8 @@ async def _auth_middleware(request, call_next):
     path = request.url.path
     if path in _AUTH_PUBLIC_PATHS or path.startswith("/static/"):
         return await call_next(request)
-    # WebSocket рукопожатие тоже несёт обычные заголовки
+    # NB: middleware('http') не вызывается для WebSocket-подключений (ASGI scope
+    # 'websocket'). Авторизацию для /ws/* проверяем вручную внутри хэндлера.
     token = (
         request.headers.get("x-token")
         or request.headers.get("X-Token")
@@ -1186,6 +1187,17 @@ def create_backup_api():
 # ─── WebSocket for live logs ──────────────────────────────────────────────────
 @app.websocket("/ws/logs")
 async def ws_logs(websocket: WebSocket):
+    # WebSocket'ы не проходят через @app.middleware("http"), поэтому в VPS-режиме
+    # авторизацию проверяем вручную по query-параметру ?token=… или заголовку.
+    if ACCESS_TOKEN:
+        token = (
+            websocket.query_params.get("token")
+            or websocket.headers.get("x-token")
+            or websocket.headers.get("X-Token")
+        )
+        if token != ACCESS_TOKEN:
+            await websocket.close(code=1008)
+            return
     await websocket.accept()
     q: asyncio.Queue = asyncio.Queue(maxsize=200)
     bot.log.subscribe(q)
