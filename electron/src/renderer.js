@@ -778,6 +778,12 @@ async function logout() {
   localStorage.removeItem('ob_token');
   localStorage.removeItem('ob_mode');
   localStorage.removeItem('ob_host');
+  // Закрываем активный WebSocket — иначе при подключении к другому VPS
+  // connectWS() видит ws.readyState !== CLOSED и не переподключается,
+  // и логи продолжают идти со старого хоста.
+  if (ws) { try { ws.close(); } catch(_){} ws = null; }
+  if (_wsReconnectTimer) { clearTimeout(_wsReconnectTimer); _wsReconnectTimer = null; }
+  document.getElementById('ws-indicator')?.classList.remove('active');
   toast('Вы вышли. Введите адрес VPS и токен заново.', '');
   // Возвращаем onboarding-экран
   obBackToConnect();

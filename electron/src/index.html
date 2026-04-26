@@ -2,7 +2,10 @@
 <html lang="ru">
 <head>
 <meta charset="UTF-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:8765 ws://127.0.0.1:8765">
+<!-- connect-src разрешает любые HTTP(S)/WS(S) — пользователь сам указывает
+     адрес своего VPS-воркера (path B), хост заранее неизвестен. Скрипты
+     и стили остаются 'self' — приложение не загружает чужой код. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self' 'unsafe-inline' 'unsafe-eval'; connect-src 'self' http: https: ws: wss:; img-src 'self' data: blob:">
 <title>FP Nexus</title>
 <link rel="stylesheet" href="styles.css">
 <script>
