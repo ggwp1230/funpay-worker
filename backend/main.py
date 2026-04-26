@@ -912,9 +912,29 @@ class FPNexus:
         """Проверяет наличие обновлений."""
         if not self._updater:
             self._updater = self._make_updater()
+        # Если апдейтер не настроен или старый токен не валиден — пробуем
+        # перерегистрироваться на VPS прозрачно для пользователя.
+        if not self._updater:
+            try:
+                _bootstrap_update_server()
+            except Exception:
+                pass
+            self._updater = self._make_updater()
         if not self._updater:
             return {"error": "Сервер обновлений не настроен", "has_update": False}
         has_upd, meta = self._updater.check_update()
+        # Если токен протух — re-bootstrap и повторяем один раз
+        if meta.get("error") and ("ток" in meta["error"].lower() or "403" in meta["error"]):
+            try:
+                cfg = load_config()
+                cfg.setdefault("update_server", {})["token"] = ""
+                save_config(cfg)
+                _bootstrap_update_server()
+                self._updater = self._make_updater()
+                if self._updater:
+                    has_upd, meta = self._updater.check_update()
+            except Exception:
+                pass
         self._update_available = has_upd
         self._update_meta = meta
         if meta.get("error"):
