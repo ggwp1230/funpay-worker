@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 import uvicorn
-from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -141,6 +141,28 @@ def vps_register(data: dict):
     meta  = load_meta()
     save_token(token, ip=ip, version=meta["version"])
 
+    return {"token": token, "version": meta["version"]}
+
+@app.post("/api/vps/auto_register")
+def vps_auto_register(request: Request):
+    """Автоматическая выдача fp_-токена клиенту (без OTP).
+
+    Используется приложением на первом запуске, чтобы простой пользователь
+    не настраивал ничего руками. Лимит — один токен на IP за минуту, чтобы
+    не плодить мусор и не давать спамить."""
+    ip = request.client.host if request.client else ""
+    now = time.time()
+    # Дешёвый rate-limit по IP (60 сек)
+    for f in TOKENS_DIR.glob("*.json"):
+        try:
+            d = json.loads(f.read_text())
+            if d.get("ip") == ip and now - d.get("created_at", 0) < 60:
+                return {"token": d["token"], "version": load_meta()["version"]}
+        except Exception:
+            continue
+    token = "fp_" + hashlib.sha256(f"{ip}{now}".encode()).hexdigest()[:32]
+    meta  = load_meta()
+    save_token(token, ip=ip, version=meta["version"])
     return {"token": token, "version": meta["version"]}
 
 @app.get("/api/version")

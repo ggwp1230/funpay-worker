@@ -1,0 +1,9 @@
+node_modules/
+dist/
+package-lock.json
+__pycache__/
+*.pyc
+.venv/
+backend/logs/
+backend/config/
+backend/backup/
