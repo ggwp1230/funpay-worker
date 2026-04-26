@@ -82,6 +82,27 @@ async function apiPost(path, data = {}) {
   });
 }
 
+// ─── Local backend helpers ───────────────────────────────────────────────────
+// Endpoints вроде /api/update/* живут ТОЛЬКО в локальном Electron-бэкенде —
+// на user-VPS их нет. Поэтому для них хардкодим 127.0.0.1:8765 и не шлём
+// X-Token (этого там не требуется).
+const LOCAL_API = 'http://127.0.0.1:8765';
+async function apiLocal(path, opts = {}) {
+  try {
+    const r = await fetch(LOCAL_API + path, opts);
+    return await r.json();
+  } catch (e) {
+    return { ok: false, message: 'Локальный бэкенд недоступен' };
+  }
+}
+async function apiLocalPost(path, data = {}) {
+  return apiLocal(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+}
+
 // ─── Bot control ─────────────────────────────────────────────────────────────
 async function startBot() {
   const d = await api('/api/start', { method: 'POST' });
@@ -759,7 +780,7 @@ async function obConnectDocker() {
 
   if (!token) { errEl.textContent = 'Введите токен'; return; }
 
-  const d = await apiPost('/api/update/connect', { url: host, token });
+  const d = await apiLocalPost('/api/update/connect', { url: host, token });
   if (d.ok) {
     localStorage.setItem('ob_token', token);
     localStorage.setItem('ob_mode', 'docker');
@@ -850,8 +871,8 @@ async function deleteGoldenKey() {
 // ─── Update page logic ────────────────────────────────────────────────────────
 
 async function checkUpdates() {
-  const d = await api('/api/update/check');
-  refreshUpdateUI(await api('/api/update/status'));
+  const d = await apiLocal('/api/update/check');
+  refreshUpdateUI(await apiLocal('/api/update/status'));
   if (d.has_update) {
     toast(`⬆ Доступно обновление v${d.remote_version}!`, 'ok');
     document.getElementById('update-nav-icon').classList.add('has-update');
@@ -900,11 +921,11 @@ async function applyUpdate() {
   btn.disabled = true;
   btn.textContent = 'Загрузка...';
 
-  await api('/api/update/apply', { method: 'POST' });
+  await apiLocal('/api/update/apply', { method: 'POST' });
 
   // Поллим прогресс
   _progressPoller = setInterval(async () => {
-    const p = await api('/api/update/progress');
+    const p = await apiLocal('/api/update/progress');
     const pct = p.pct || 0;
 
     document.getElementById('upd-bar').style.width   = pct + '%';
@@ -942,7 +963,7 @@ async function applyUpdate() {
 function go_updateSettings() {
   document.getElementById('upd-settings-card').style.display = '';
   // Заполняем текущими значениями
-  api('/api/update/status').then(d => {
+  apiLocal('/api/update/status').then(d => {
     if (d && d.server_url) document.getElementById('upd-url-input').value = d.server_url;
   });
 }
@@ -954,14 +975,14 @@ async function saveUpdateServer() {
   resEl.style.color = 'var(--dim)';
   resEl.textContent = 'Подключение...';
 
-  const d = await apiPost('/api/update/connect', { url, token });
+  const d = await apiLocalPost('/api/update/connect', { url, token });
   resEl.textContent  = d.message;
   resEl.style.color  = d.ok ? 'var(--green)' : 'var(--red)';
 
   if (d.ok) {
     document.getElementById('upd-settings-card').style.display = 'none';
     toast(d.message, 'ok');
-    const status = await api('/api/update/status');
+    const status = await apiLocal('/api/update/status');
     refreshUpdateUI(status);
   }
 }
