@@ -19,6 +19,18 @@ import uvicorn
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+
+# Multi-tenant FunPay-воркер (Phase 1: keepalive). Импорт обёрнут в try/except,
+# чтобы старые установки VPS без FunPayAPI/cryptography всё ещё могли раздавать
+# обновления и не падать при импорте.
+try:
+    import funpay_worker as fw  # type: ignore
+    FW_AVAILABLE = True
+except Exception as _e:
+    print(f"[funpay_worker] not available: {_e}")
+    fw = None  # type: ignore
+    FW_AVAILABLE = False
 
 # ── Config ────────────────────────────────────────────────────────────────────
 ADMIN_TOKEN  = os.environ.get("ADMIN_TOKEN", "change_me_secret_admin_token")
@@ -156,6 +168,76 @@ def vps_auto_register(request: Request):
 @app.get("/api/version")
 def api_version():
     return {"version": load_meta()["version"]}
+
+
+# ── FunPay account endpoints (Phase 1: keepalive) ────────────────────────────
+def _require_fp(x_token: Optional[str]) -> str:
+    valid, data = validate_fp_token(x_token or "")
+    if not valid:
+        raise HTTPException(403, data.get("error", "Invalid access token"))
+    return x_token  # type: ignore[return-value]
+
+
+def _require_fw():
+    if not FW_AVAILABLE:
+        raise HTTPException(
+            503,
+            "FunPay-воркер не установлен на VPS. Установите зависимости: "
+            "pip install FunPayAPI cryptography и задайте FP_GOLDEN_KEY_AES в env."
+        )
+
+
+class GoldenKeyBody(BaseModel):
+    golden_key: str
+    user_agent: Optional[str] = ""
+
+
+@app.post("/api/account/upload_key")
+def account_upload_key(
+    body: GoldenKeyBody,
+    x_token: Optional[str] = Header(None),
+):
+    """Сохраняет зашифрованный golden_key для пользователя (по fp-токену)."""
+    _require_fw()
+    fp_token = _require_fp(x_token)
+    if not body.golden_key.strip():
+        raise HTTPException(400, "golden_key пустой")
+    fw.store_account(fp_token, body.golden_key.strip(), body.user_agent or "")
+    return {"ok": True}
+
+
+@app.post("/api/account/start")
+def account_start(x_token: Optional[str] = Header(None)):
+    """Поднимает keepalive-воркер для аккаунта. Делает первый login."""
+    _require_fw()
+    fp_token = _require_fp(x_token)
+    return fw.start_worker(fp_token)
+
+
+@app.post("/api/account/stop")
+def account_stop(x_token: Optional[str] = Header(None)):
+    """Останавливает воркер (аккаунт уйдёт в офлайн)."""
+    _require_fw()
+    fp_token = _require_fp(x_token)
+    return fw.stop_worker(fp_token)
+
+
+@app.get("/api/account/status")
+def account_status(x_token: Optional[str] = Header(None)):
+    """Текущий статус keepalive-воркера: онлайн, баланс, продажи, ошибки."""
+    _require_fw()
+    fp_token = _require_fp(x_token)
+    return fw.get_status(fp_token)
+
+
+@app.delete("/api/account")
+def account_delete(x_token: Optional[str] = Header(None)):
+    """Полностью удаляет аккаунт с VPS (для logout)."""
+    _require_fw()
+    fp_token = _require_fp(x_token)
+    fw.delete_account(fp_token)
+    return {"ok": True}
+
 
 # ── Admin endpoints ────────────────────────────────────────────────────────────
 
@@ -510,6 +592,19 @@ document.getElementById('admin-token').addEventListener('keydown', e => {{ if(e.
 </script>
 </body>
 </html>"""
+
+@app.on_event("startup")
+def _on_startup():
+    """Стартовая инициализация: поднимаем keepalive-поток и восстанавливаем
+    воркеры всех активных аккаунтов после рестарта."""
+    if FW_AVAILABLE:
+        try:
+            fw.start_keepalive_thread()
+            fw.restore_workers()
+            print(f"[startup] funpay_worker запущен, активных воркеров: {len(fw.list_active())}")
+        except Exception as e:
+            print(f"[startup] funpay_worker init failed: {e}")
+
 
 if __name__ == "__main__":
     print(f"[UpdateServer] Starting on port {PORT}")
