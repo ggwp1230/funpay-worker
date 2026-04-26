@@ -993,12 +993,56 @@ bot = FPNexus()
 async def lifespan(app: FastAPI):
     # FIX: asyncio.get_running_loop() вместо устаревшего get_event_loop()
     bot.log.set_loop(asyncio.get_running_loop())
-    bot.log.add("info", "system", "FastAPI backend запущен на порту 8765")
+    bot.log.add("info", "system", "FastAPI backend запущен")
+    # В VPS-режиме (AUTO_START=1) пытаемся сразу подключиться к FunPay,
+    # чтобы аккаунт ушёл в онлайн без необходимости дёргать /api/start
+    # из приложения. Если golden_key не задан — просто логируем и ждём.
+    if os.environ.get("AUTO_START", "").strip() in ("1", "true", "yes"):
+        try:
+            ok, msg = bot.start()
+            bot.log.add("info" if ok else "error", "system", f"AUTO_START: {msg}")
+        except Exception as e:
+            bot.log.add("error", "system", f"AUTO_START failed: {e}")
     yield
     bot.stop()
 
 app = FastAPI(title="FP Nexus API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+# ─── Авторизация (только для VPS-режима) ─────────────────────────────────────
+# Когда бэкенд запущен в Docker-контейнере на пользовательском VPS, он
+# слушает на 0.0.0.0 и должен быть защищён от чужих запросов. Если задана
+# переменная окружения ACCESS_TOKEN — middleware проверяет каждый запрос
+# на заголовок X-Token. Если ACCESS_TOKEN пустой (локальный режим в
+# Electron) — авторизация отключена, всё работает как раньше.
+ACCESS_TOKEN = os.environ.get("ACCESS_TOKEN", "").strip()
+_AUTH_PUBLIC_PATHS = {"/ping", "/api/ping", "/healthz", "/", "/openapi.json", "/docs", "/redoc"}
+
+
+@app.middleware("http")
+async def _auth_middleware(request, call_next):
+    if not ACCESS_TOKEN:
+        return await call_next(request)
+    path = request.url.path
+    if path in _AUTH_PUBLIC_PATHS or path.startswith("/static/"):
+        return await call_next(request)
+    # WebSocket рукопожатие тоже несёт обычные заголовки
+    token = (
+        request.headers.get("x-token")
+        or request.headers.get("X-Token")
+        or request.query_params.get("token")
+    )
+    if token != ACCESS_TOKEN:
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Unauthorized"}, status_code=403)
+    return await call_next(request)
+
+
+@app.get("/ping")
+def _ping():
+    """Healthcheck — не требует авторизации даже в VPS-режиме."""
+    return {"ok": True, "version": get_local_version() if UPDATER_AVAILABLE else "?"}
 
 
 # ─── Pydantic models ─────────────────────────────────────────────────────────
@@ -1331,4 +1375,8 @@ except Exception as _e:
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8765, log_level="info")
+    # HOST/PORT берутся из env. По умолчанию — локальный режим (127.0.0.1:8765)
+    # для Electron. В VPS-Docker-режиме передаём HOST=0.0.0.0 PORT=8000.
+    host = os.environ.get("HOST", "127.0.0.1")
+    port = int(os.environ.get("PORT", "8765"))
+    uvicorn.run(app, host=host, port=port, log_level="info")
