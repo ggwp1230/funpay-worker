@@ -203,8 +203,23 @@ docker stop "${APP_NAME}" 2>/dev/null || true
 docker rm   "${APP_NAME}" 2>/dev/null || true
 (cd "${APP_DIR}" && docker compose up -d) >/dev/null
 
+# ── Сохраняем конфиг для пользователя ────────────────────────────────────────
+# Делаем это сразу после старта контейнера, до cron/ping — чтобы даже если
+# дальше что-то упадёт (например crontab не установлен), у юзера остался
+# воркер.conf и финальный вывод напечатался.
+cat > "${APP_DIR}/worker.conf" <<CONF
+URL=http://${SERVER_IP}:${PORT}
+TOKEN=${TOKEN}
+PORT=${PORT}
+IP=${SERVER_IP}
+INSTALLED_AT=$(date -Iseconds)
+CONF
+chmod 600 "${APP_DIR}/worker.conf"
+
 # ── Авто-обновление через cron ──────────────────────────────────────────────
-cat > "${APP_DIR}/update.sh" <<UPD
+# Любая ошибка здесь не должна валить установку — это «приятный плюс».
+{
+  cat > "${APP_DIR}/update.sh" <<UPD
 #!/usr/bin/env bash
 # Каждые 30 минут пересобираем образ из последнего main, если что-то поменялось.
 set -euo pipefail
@@ -218,13 +233,18 @@ docker build -t "${IMAGE_TAG}" "${SRC_DIR}" >/dev/null
 cd "${APP_DIR}" && docker compose up -d --force-recreate >/dev/null
 echo "[\$(date)] обновлено до \${REMOTE:0:7}"
 UPD
-chmod +x "${APP_DIR}/update.sh"
-
-CRON_LINE="*/30 * * * * ${APP_DIR}/update.sh >> ${APP_DIR}/update.log 2>&1"
-( (crontab -l 2>/dev/null || true) | grep -v "${APP_DIR}/update.sh" ; echo "${CRON_LINE}" ) | crontab -
+  chmod +x "${APP_DIR}/update.sh"
+  if command -v crontab &>/dev/null; then
+    CRON_LINE="*/30 * * * * ${APP_DIR}/update.sh >> ${APP_DIR}/update.log 2>&1"
+    EXISTING=$(crontab -l 2>/dev/null | grep -v "${APP_DIR}/update.sh" || true)
+    printf "%s\n%s\n" "$EXISTING" "$CRON_LINE" | crontab -
+  else
+    echo -e "  ${YELLOW}crontab не установлен, авто-обновление пропущено${RESET}"
+  fi
+} || echo -e "  ${YELLOW}настройка авто-обновления пропущена (не критично)${RESET}"
 
 # ── Ожидание готовности ──────────────────────────────────────────────────────
-echo -ne "${DIM}Жду пока FunPay-сессия инициализируется"
+echo -ne "${DIM}Жду пока бэкенд поднимется"
 for i in $(seq 1 30); do
   if curl -sf "http://localhost:${PORT}/ping" &>/dev/null; then
     echo -e " ${GREEN}готово${RESET}"
@@ -232,16 +252,6 @@ for i in $(seq 1 30); do
   fi
   echo -n "."; sleep 1
 done
-
-# ── Сохраняем конфиг для пользователя ────────────────────────────────────────
-cat > "${APP_DIR}/worker.conf" <<CONF
-URL=http://${SERVER_IP}:${PORT}
-TOKEN=${TOKEN}
-PORT=${PORT}
-IP=${SERVER_IP}
-INSTALLED_AT=$(date -Iseconds)
-CONF
-chmod 600 "${APP_DIR}/worker.conf"
 
 # ── Финальный вывод ──────────────────────────────────────────────────────────
 echo -e "\n${LINE}"

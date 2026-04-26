@@ -609,23 +609,52 @@
 
     <!-- VPS mode panel -->
     <div class="ob-panel" id="ob-vps-panel">
-      <div class="ob-field-label">CONNECTION_TOKEN</div>
-      <div class="ob-input-wrap">
-        <svg class="ob-input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="m19 8-3.09 3.09M19 8l-2-2m2 2h-3m0 0v3"/></svg>
-        <input id="ob-token" type="password" class="ob-input"
-          placeholder="fp_xxxxxxxxxxxxxxxx"
-          onkeydown="if(event.key==='Enter')obConnect()">
-        <button class="ob-eye" onclick="obToggleEye(this)" tabindex="-1">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+      <!-- Шаг 1: подключение к VPS -->
+      <div id="ob-step-connect">
+        <div class="ob-field-label">АДРЕС VPS</div>
+        <input id="ob-host" type="text" class="ob-input"
+          placeholder="http://1.2.3.4:8000"
+          style="margin-bottom:12px"
+          onkeydown="if(event.key==='Enter')document.getElementById('ob-token').focus()">
+        <div class="ob-field-label">FP-ТОКЕН</div>
+        <div class="ob-input-wrap">
+          <svg class="ob-input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="8" cy="15" r="4"/><path d="m19 8-3.09 3.09M19 8l-2-2m2 2h-3m0 0v3"/></svg>
+          <input id="ob-token" type="password" class="ob-input"
+            placeholder="fp_xxxxxxxxxxxxxxxx"
+            onkeydown="if(event.key==='Enter')obConnect()">
+          <button class="ob-eye" onclick="obToggleEye(this,'ob-token')" tabindex="-1">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+        <div id="ob-error" class="ob-error"></div>
+        <button id="ob-connect-btn" class="ob-btn-primary" onclick="obConnect()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+          Подключиться к VPS
         </button>
       </div>
-      <!-- ob-host пустой — URL VPS захардкожен в бэкенде, юзер вводит только токен -->
-      <input id="ob-host" type="hidden" value="">
-      <div id="ob-error" class="ob-error"></div>
-      <button id="ob-connect-btn" class="ob-btn-primary" onclick="obConnect()">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
-        Подключиться к VPS
-      </button>
+
+      <!-- Шаг 2: ввод golden_key (показывается после удачного connect) -->
+      <div id="ob-step-key" style="display:none">
+        <div class="ob-field-label">GOLDEN_KEY (cookie с funpay.com)</div>
+        <div class="ob-input-wrap">
+          <svg class="ob-input-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <input id="ob-gk" type="password" class="ob-input"
+            placeholder="32 символа из cookie funpay.com"
+            onkeydown="if(event.key==='Enter')obSaveKey()">
+          <button class="ob-eye" onclick="obToggleEye(this,'ob-gk')" tabindex="-1">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+          </button>
+        </div>
+        <div id="ob-key-error" class="ob-error"></div>
+        <button id="ob-key-btn" class="ob-btn-primary" onclick="obSaveKey()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
+          Запустить бота
+        </button>
+        <button class="ob-btn-outline" onclick="obBackToConnect()" style="margin-top:8px">← Назад</button>
+        <p class="ob-hint" style="margin-top:14px">
+          F12 на funpay.com → Application → Cookies → funpay.com → значение <b>golden_key</b>
+        </p>
+      </div>
 
       <div class="ob-divider">НЕТ VPS?</div>
       <p class="ob-hint">Установите worker на свой сервер через Telegram</p>
