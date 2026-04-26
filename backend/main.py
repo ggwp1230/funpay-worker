@@ -1169,8 +1169,9 @@ def set_config(body: ConfigPatch):
         set_secure_golden_key(incoming_gk)
         # Если бот ещё не запущен (например VPS только что подняли без
         # golden_key) — пробуем подключиться сразу с новым ключом.
+        # is_running — @property, обращаемся без скобок.
         try:
-            if not bot.is_running():
+            if not bot.is_running:
                 ok, msg = bot.start()
                 bot.log.add(
                     "info" if ok else "error",

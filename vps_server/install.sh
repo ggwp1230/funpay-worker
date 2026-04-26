@@ -56,27 +56,48 @@ echo -e "  ${GREEN}Docker ${DOCKER_VER}${RESET}"
 
 # ── Registry mirrors ─────────────────────────────────────────────────────────
 # Если docker.io напрямую не отвечает (бывает у российских/CIS VPS), Docker
-# не сможет скачать базовый образ. Прописываем публичные зеркала на всякий
-# случай — Docker сам выберет рабочее.
+# не сможет скачать базовый образ. Прописываем публичные зеркала; если
+# daemon.json уже существует — сохраняем все остальные настройки и только
+# мержим в него ключ "registry-mirrors".
 echo -e "${DIM}Настраиваю зеркала Docker Hub...${RESET}"
 if ! curl -fsS --max-time 4 https://registry-1.docker.io/v2/ -o /dev/null 2>/dev/null; then
   echo -e "  ${YELLOW}registry-1.docker.io недоступен — включаю зеркала${RESET}"
 fi
 mkdir -p /etc/docker
 DAEMON_JSON="/etc/docker/daemon.json"
-if [[ -f "$DAEMON_JSON" ]] && ! grep -q "registry-mirrors" "$DAEMON_JSON"; then
-  cp "$DAEMON_JSON" "${DAEMON_JSON}.bak.$(date +%s)"
-fi
-cat > "$DAEMON_JSON" <<'JSON'
+MIRRORS='["https://mirror.gcr.io","https://dockerhub.timeweb.cloud","https://docker.rainbond.cc","https://huecker.io"]'
+
+_write_fresh_daemon_json() {
+  cat > "$DAEMON_JSON" <<JSON
 {
-  "registry-mirrors": [
-    "https://mirror.gcr.io",
-    "https://dockerhub.timeweb.cloud",
-    "https://docker.rainbond.cc",
-    "https://huecker.io"
-  ]
+  "registry-mirrors": ${MIRRORS}
 }
 JSON
+}
+
+if [[ -f "$DAEMON_JSON" ]]; then
+  cp "$DAEMON_JSON" "${DAEMON_JSON}.bak.$(date +%s)"
+  # Сохраняем все существующие ключи, меняем только registry-mirrors. Если
+  # python3 нет или файл битый — пишем минимальный с нуля.
+  if command -v python3 &>/dev/null; then
+    python3 - "$DAEMON_JSON" "$MIRRORS" <<'PY' || _write_fresh_daemon_json
+import json, sys
+path, mirrors = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f: d = json.load(f)
+except Exception:
+    d = {}
+if not isinstance(d, dict): d = {}
+d["registry-mirrors"] = json.loads(mirrors)
+with open(path, "w") as f: json.dump(d, f, indent=2)
+PY
+  else
+    _write_fresh_daemon_json
+  fi
+else
+  _write_fresh_daemon_json
+fi
+
 systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true
 sleep 2
 echo -e "  ${GREEN}Зеркала прописаны в ${DAEMON_JSON}${RESET}"
