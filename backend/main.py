@@ -42,13 +42,50 @@ from typing import Optional, List, Dict, Any
 from contextlib import asynccontextmanager
 
 # ─── Key protection ───────────────────────────────────────────────────────────
-# golden_key хранится в Electron safeStorage (Windows DPAPI / macOS Keychain)
-# и передаётся в бэкенд через переменную окружения FUNPAY_GOLDEN_KEY.
-# В settings.json ключ НЕ сохраняется — это намеренно.
+# В Electron-режиме golden_key хранится в safeStorage (Windows DPAPI / macOS
+# Keychain) и передаётся в бэкенд через FUNPAY_GOLDEN_KEY. В settings.json он
+# не сохраняется.
+#
+# В VPS-режиме (ACCESS_TOKEN задан) golden_key приходит через POST /api/config
+# из Electron-приложения и сохраняется в data-volume (golden_key.dat), чтобы
+# переживать рестарты и пересборки контейнера.
+GOLDEN_KEY_PATH = Path(__file__).parent / "config" / "golden_key.dat"
+
+
+def _is_vps_mode() -> bool:
+    return bool(os.environ.get("ACCESS_TOKEN", "").strip())
+
 
 def get_secure_golden_key() -> str:
-    """Получает golden_key из env (установлен Electron при запуске)."""
-    return os.environ.get("FUNPAY_GOLDEN_KEY", "").strip()
+    """В Electron — env. В VPS — сначала персистентный файл, потом env
+    (env используется при самом первом старте контейнера)."""
+    env_key = os.environ.get("FUNPAY_GOLDEN_KEY", "").strip()
+    if not _is_vps_mode():
+        return env_key
+    try:
+        if GOLDEN_KEY_PATH.exists():
+            saved = GOLDEN_KEY_PATH.read_text(encoding="utf-8").strip()
+            if saved:
+                return saved
+    except Exception:
+        pass
+    return env_key
+
+
+def set_secure_golden_key(value: str) -> None:
+    """Сохраняет golden_key персистентно. Только в VPS-режиме — в Electron
+    ключ управляется через safeStorage и записывать его в файл нельзя."""
+    if not _is_vps_mode():
+        return
+    try:
+        GOLDEN_KEY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        GOLDEN_KEY_PATH.write_text((value or "").strip(), encoding="utf-8")
+        try:
+            GOLDEN_KEY_PATH.chmod(0o600)
+        except Exception:
+            pass
+    except Exception:
+        pass
 
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -1115,6 +1152,9 @@ def set_config(body: ConfigPatch):
     cfg = load_config()
     # Бэкап перед изменением
     backup_config()
+    # golden_key хранится отдельно (в Electron — safeStorage, на VPS —
+    # data/golden_key.dat). Из общего конфига его всегда вычищаем.
+    incoming_gk = body.data.pop("golden_key", None) if isinstance(body.data, dict) else None
     for key, value in body.data.items():
         if "." in key:
             parts = key.split(".")
@@ -1125,6 +1165,21 @@ def set_config(body: ConfigPatch):
         else:
             cfg[key] = value
     save_config(cfg)
+    if incoming_gk is not None and _is_vps_mode():
+        set_secure_golden_key(incoming_gk)
+        # Если бот ещё не запущен (например VPS только что подняли без
+        # golden_key) — пробуем подключиться сразу с новым ключом.
+        # is_running — @property, обращаемся без скобок.
+        try:
+            if not bot.is_running:
+                ok, msg = bot.start()
+                bot.log.add(
+                    "info" if ok else "error",
+                    "system",
+                    f"start после получения golden_key: {msg}",
+                )
+        except Exception as e:
+            bot.log.add("error", "system", f"start failed: {e}")
     return {"ok": True, "message": "Настройки сохранены"}
 
 

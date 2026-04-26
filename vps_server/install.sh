@@ -54,6 +54,54 @@ fi
 DOCKER_VER=$(docker --version | grep -oP '\d+\.\d+\.\d+' | head -1)
 echo -e "  ${GREEN}Docker ${DOCKER_VER}${RESET}"
 
+# ── Registry mirrors ─────────────────────────────────────────────────────────
+# Если docker.io напрямую не отвечает (бывает у российских/CIS VPS), Docker
+# не сможет скачать базовый образ. Прописываем публичные зеркала; если
+# daemon.json уже существует — сохраняем все остальные настройки и только
+# мержим в него ключ "registry-mirrors".
+echo -e "${DIM}Настраиваю зеркала Docker Hub...${RESET}"
+if ! curl -fsS --max-time 4 https://registry-1.docker.io/v2/ -o /dev/null 2>/dev/null; then
+  echo -e "  ${YELLOW}registry-1.docker.io недоступен — включаю зеркала${RESET}"
+fi
+mkdir -p /etc/docker
+DAEMON_JSON="/etc/docker/daemon.json"
+MIRRORS='["https://mirror.gcr.io","https://dockerhub.timeweb.cloud","https://docker.rainbond.cc","https://huecker.io"]'
+
+_write_fresh_daemon_json() {
+  cat > "$DAEMON_JSON" <<JSON
+{
+  "registry-mirrors": ${MIRRORS}
+}
+JSON
+}
+
+if [[ -f "$DAEMON_JSON" ]]; then
+  cp "$DAEMON_JSON" "${DAEMON_JSON}.bak.$(date +%s)"
+  # Сохраняем все существующие ключи, меняем только registry-mirrors. Если
+  # python3 нет или файл битый — пишем минимальный с нуля.
+  if command -v python3 &>/dev/null; then
+    python3 - "$DAEMON_JSON" "$MIRRORS" <<'PY' || _write_fresh_daemon_json
+import json, sys
+path, mirrors = sys.argv[1], sys.argv[2]
+try:
+    with open(path) as f: d = json.load(f)
+except Exception:
+    d = {}
+if not isinstance(d, dict): d = {}
+d["registry-mirrors"] = json.loads(mirrors)
+with open(path, "w") as f: json.dump(d, f, indent=2)
+PY
+  else
+    _write_fresh_daemon_json
+  fi
+else
+  _write_fresh_daemon_json
+fi
+
+systemctl restart docker 2>/dev/null || service docker restart 2>/dev/null || true
+sleep 2
+echo -e "  ${GREEN}Зеркала прописаны в ${DAEMON_JSON}${RESET}"
+
 # ── git ──────────────────────────────────────────────────────────────────────
 if ! command -v git &>/dev/null; then
   apt-get update -qq && apt-get install -y -qq git
@@ -71,21 +119,9 @@ while true; do
   echo -e "${RED}Код должен быть 6 символов${RESET}"
 done
 
-# ── Golden key ────────────────────────────────────────────────────────────────
-echo -e "\n${LINE}"
-echo -e "${BOLD}   golden_key от вашего FunPay-аккаунта${RESET}"
-echo -e "${DIM}Скопируйте значение cookie 'golden_key' с funpay.com → DevTools (F12) →"
-echo -e "Application → Cookies → funpay.com${RESET}"
-echo -e "${LINE}"
-while true; do
-  echo -ne "${BOLD}golden_key: ${RESET}"
-  read -r GOLDEN_KEY </dev/tty
-  GOLDEN_KEY=$(echo "$GOLDEN_KEY" | tr -d ' \r\n')
-  if [[ ${#GOLDEN_KEY} -ge 16 ]]; then break; fi
-  echo -e "${RED}Слишком короткий, попробуйте ещё раз${RESET}"
-done
-
 # ── Регистрация VPS на API ───────────────────────────────────────────────────
+# golden_key пользователь введёт уже в Electron-приложении — оно само пушит
+# его на VPS через POST /api/config. На этом этапе ключ не нужен.
 echo -e "\n${DIM}Регистрирую VPS на ${API_URL}...${RESET}"
 SERVER_IP=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
   || curl -s --max-time 5 https://ifconfig.me 2>/dev/null \
@@ -140,7 +176,9 @@ services:
     ports:
       - "${PORT}:8000"
     environment:
-      - FUNPAY_GOLDEN_KEY=${GOLDEN_KEY}
+      # golden_key приходит через POST /api/config из приложения и хранится
+      # в data-volume (/app/config/golden_key.dat). FUNPAY_GOLDEN_KEY оставлен
+      # как опциональный fallback, но в обычном флоу он не используется.
       - ACCESS_TOKEN=${TOKEN}
       - AUTO_START=1
       - HOST=0.0.0.0
@@ -212,7 +250,9 @@ echo -e "${LINE}\n"
 echo -e "${BOLD}Адрес воркера:${RESET}    ${CYAN}http://${SERVER_IP}:${PORT}${RESET}"
 echo -e "${BOLD}fp-токен:${RESET}         ${CYAN}${TOKEN}${RESET}"
 echo -e ""
-echo -e "${DIM}Скопируйте оба значения и вставьте в приложение FP Nexus при первом запуске.${RESET}"
+echo -e "${DIM}Скопируйте оба значения и вставьте в приложение FP Nexus при первом запуске."
+echo -e "Там же приложение попросит ваш golden_key (cookie с funpay.com) и сразу"
+echo -e "запустит бота — после этого аккаунт уйдёт в онлайн на 24/7.${RESET}"
 echo -e ""
 echo -e "${DIM}Управление:${RESET}"
 echo -e "  ${DIM}docker logs -f ${APP_NAME}${RESET}              просмотр логов"
