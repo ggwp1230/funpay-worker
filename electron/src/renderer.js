@@ -357,14 +357,32 @@ async function clearLogs() {
 }
 
 // ─── Settings ─────────────────────────────────────────────────────────────────
+function _isVpsMode() {
+  // VPS-режим = в localStorage сохранён ob_host (произвольный хост юзерского
+  // VPS). Если хост пустой или указывает на 127.0.0.1 — это локальный
+  // Electron-бэкенд (старый Docker-режим).
+  try {
+    const h = (localStorage.getItem('ob_host') || '').trim();
+    if (!h) return false;
+    return !/^https?:\/\/(127\.0\.0\.1|localhost)/i.test(h);
+  } catch (_) { return false; }
+}
+
 async function loadSettings() {
   const d = await api('/api/config');
   if (!d) return;
   const gkInput = document.getElementById('cfg-gk');
-  // Проверяем есть ли ключ в safeStorage
-  const keyExists = await window.electron.keyExists();
+  // В VPS-режиме источником правды является /api/config.has_key (golden_key
+  // лежит на VPS, не в локальном safeStorage). В локальном режиме — старая
+  // логика через window.electron.keyExists().
+  let keyExists = false;
+  if (_isVpsMode()) {
+    keyExists = !!(d && d.has_key);
+  } else {
+    try { keyExists = await window.electron.keyExists(); } catch (_) { keyExists = false; }
+  }
   if (keyExists) {
-    gkInput.placeholder = '🔒 Ключ сохранён в защищённом хранилище Windows — введите новый для замены';
+    gkInput.placeholder = '🔒 Ключ уже сохранён — введите новый, если хотите заменить';
   } else {
     gkInput.placeholder = 'Вставьте значение куки golden_key';
   }
@@ -377,14 +395,22 @@ async function saveSettings() {
   const gk = document.getElementById('cfg-gk').value.trim();
 
   if (gk) {
-    // Сохраняем golden_key в Electron safeStorage (DPAPI/Keychain) — не в файл!
-    await window.electron.keySave(gk);
-    document.getElementById('cfg-gk').value = '';
-    // Перезапускаем бэкенд чтобы он получил новый ключ через env
-    toast('Ключ сохранён. Перезапускаю бэкенд...', '');
-    await window.electron.backendRestart();
-    await new Promise(r => setTimeout(r, 1500));
-    await doConnect();
+    if (_isVpsMode()) {
+      // В VPS-режиме просто включаем golden_key в патч — VPS-бэкенд
+      // персистит его в data-volume и сразу перезапускает бота.
+      patch.golden_key = gk;
+      document.getElementById('cfg-gk').value = '';
+      toast('Сохраняю ключ на VPS...', '');
+    } else {
+      // Локальный режим: ключ уходит в Electron safeStorage, бэкенд
+      // перезапускается чтобы подхватить env.
+      await window.electron.keySave(gk);
+      document.getElementById('cfg-gk').value = '';
+      toast('Ключ сохранён. Перезапускаю бэкенд...', '');
+      await window.electron.backendRestart();
+      await new Promise(r => setTimeout(r, 1500));
+      await doConnect();
+    }
   }
 
   const d = await apiPost('/api/config', { data: patch });
@@ -883,8 +909,14 @@ async function logout() {
 }
 
 async function deleteGoldenKey() {
-  if (!confirm('Удалить golden_key из защищённого хранилища?')) return;
-  await window.electron.keyDelete();
+  if (!confirm('Удалить golden_key? Бот остановится.')) return;
+  if (_isVpsMode()) {
+    // Чистим ключ на VPS
+    await apiPost('/api/config', { data: { golden_key: '' } });
+    try { await api('/api/stop', { method: 'POST' }); } catch (_) {}
+  } else {
+    await window.electron.keyDelete();
+  }
   toast('Golden key удалён. Укажите новый в Настройках.', 'warn');
   loadSettings();
 }
