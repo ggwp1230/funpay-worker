@@ -303,6 +303,13 @@ class EventLog:
 
 # ─── Stats ───────────────────────────────────────────────────────────────────
 class BotStats:
+    # Активность храним в почасовых bucket'ах за последние 24 часа —
+    # этого достаточно для спарклайна на дашборде. Bucket = unix-час
+    # (time // 3600). Мапа ключ→counters, чищаем всё старше 24 часов при
+    # каждой записи. Не персистим: сбрасываются при рестарте бота.
+    _BUCKET_FIELDS = ("messages_received", "messages_sent",
+                      "orders_processed", "lots_raised")
+
     def __init__(self):
         self.messages_sent = 0
         self.messages_received = 0
@@ -313,10 +320,38 @@ class BotStats:
         self.sales_history: list = []   # последние 50 продаж
         self.start_time: Optional[float] = None
         self._lock = threading.Lock()
+        self._activity: dict[int, dict[str, int]] = {}
+
+    def _bump_activity(self, field: str, by: int = 1) -> None:
+        """Кладёт инкремент в текущий часовой bucket (под _lock)."""
+        if field not in self._BUCKET_FIELDS:
+            return
+        bucket = int(time.time() // 3600)
+        cutoff = bucket - 23
+        self._activity = {b: v for b, v in self._activity.items() if b >= cutoff}
+        cur = self._activity.setdefault(bucket, {f: 0 for f in self._BUCKET_FIELDS})
+        cur[field] = cur.get(field, 0) + by
 
     def inc(self, field: str, by: int = 1):
         with self._lock:
             setattr(self, field, getattr(self, field) + by)
+            self._bump_activity(field, by)
+
+    def activity_series(self) -> dict[str, list[int]]:
+        """24 точки (по часам) за последние 24 часа для каждого счётчика.
+
+        Индекс 0 — 23 часа назад, индекс 23 — текущий час.
+        """
+        now_bucket = int(time.time() // 3600)
+        with self._lock:
+            data = dict(self._activity)
+        out: dict[str, list[int]] = {f: [0] * 24 for f in self._BUCKET_FIELDS}
+        for b, counts in data.items():
+            idx = 23 - (now_bucket - b)
+            if 0 <= idx < 24:
+                for f in self._BUCKET_FIELDS:
+                    out[f][idx] = counts.get(f, 0)
+        return out
 
     def reset(self):
         with self._lock:
@@ -328,6 +363,7 @@ class BotStats:
             self.sales_total = 0.0
             self.sales_history = []
             self.start_time = None
+            self._activity = {}
 
     def add_sale(self, order_id: str, buyer: str, price: float, title: str = ""):
         with self._lock:
@@ -374,6 +410,7 @@ class BotStats:
             "earnings_today":    earnings["today"],
             "earnings_week":     earnings["week"],
             "uptime":            uptime,
+            "activity":          self.activity_series(),
         }
 
 

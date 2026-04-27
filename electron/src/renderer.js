@@ -31,12 +31,38 @@ let _raiseCountdownTimer = null;
 function go(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
-  document.getElementById('page-' + page).classList.add('active');
+  const pageEl = document.getElementById('page-' + page);
+  // Re-trigger CSS page-fade анимации даже если страница уже была открыта:
+  // снимаем .active, forces reflow, затем возвращаем.
+  if (pageEl) {
+    pageEl.classList.remove('active');
+    void pageEl.offsetWidth;
+    pageEl.classList.add('active');
+  }
   document.getElementById('nav-' + page)?.classList.add('active');
   if (page === 'settings') loadSettings();
   if (page === 'ar')       loadAR();
   if (page === 'raise')    loadRaise();
 }
+
+// ─── Sidebar collapse ───────────────────────────────────────────────────────
+function toggleSidebar() {
+  const sb = document.getElementById('sidebar');
+  sb.classList.toggle('collapsed');
+  localStorage.setItem('fpn_sidebar_collapsed', sb.classList.contains('collapsed') ? '1' : '0');
+}
+function _onReady(fn) {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', fn);
+  } else {
+    fn();
+  }
+}
+_onReady(() => {
+  if (localStorage.getItem('fpn_sidebar_collapsed') === '1') {
+    document.getElementById('sidebar')?.classList.add('collapsed');
+  }
+});
 
 // ─── Toast ───────────────────────────────────────────────────────────────────
 function toast(msg, type = '') {
@@ -235,7 +261,254 @@ async function updateStatus() {
   } else if (!rs.running) {
     stopRaiseCountdown();
   }
+
+  // Активность: рендерим график
+  renderActivityChart(s.activity);
+
+  // Нижняя статус-полоса
+  updateStatusBar(d);
 }
+
+// ─── Activity chart (inline SVG spark lines) ────────────────────────────────
+const ACTIVITY_SERIES = [
+  { key: 'messages_received', label: 'Входящие',   color: 'var(--accent)'  },
+  { key: 'messages_sent',     label: 'Отправлено', color: 'var(--purple)'  },
+  { key: 'orders_processed',  label: 'Заказы',     color: 'var(--green)'   },
+  { key: 'lots_raised',       label: 'Поднятия',   color: 'var(--orange)'  },
+];
+const _activityOff = new Set(
+  (localStorage.getItem('fpn_activity_off') || '').split(',').filter(Boolean)
+);
+
+function _persistActivityOff() {
+  localStorage.setItem('fpn_activity_off', [..._activityOff].join(','));
+}
+
+function renderActivityChart(activity) {
+  const host = document.getElementById('activity-chart');
+  if (!host) return;
+  activity = activity || {};
+
+  // Габариты SVG — viewBox фиксированный, scaling через width:100%
+  const W = 600, H = 140;
+  const padL = 32, padR = 10, padT = 10, padB = 20;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+
+  const step = chartW / 23; // 24 точки, 23 интервала
+
+  // Общий максимум среди включённых серий (для единого масштаба)
+  let maxY = 1;
+  for (const s of ACTIVITY_SERIES) {
+    if (_activityOff.has(s.key)) continue;
+    const arr = activity[s.key] || [];
+    for (const v of arr) if (v > maxY) maxY = v;
+  }
+  // красивый «ceiling»: 1, 2, 5, 10, 20, 50 …
+  const niceMax = (n) => {
+    const pow = Math.pow(10, Math.floor(Math.log10(n)));
+    const d = n / pow;
+    const m = d <= 1 ? 1 : d <= 2 ? 2 : d <= 5 ? 5 : 10;
+    return m * pow;
+  };
+  maxY = niceMax(maxY);
+
+  const x = (i) => padL + i * step;
+  const y = (v) => padT + chartH - (v / maxY) * chartH;
+
+  // Сетка (3 горизонтальные линии + подписи)
+  let gridSvg = '';
+  for (let i = 0; i <= 3; i++) {
+    const gy = padT + (chartH / 3) * i;
+    const val = Math.round(maxY * (1 - i / 3));
+    gridSvg += `<line class="ac-grid" x1="${padL}" x2="${padL + chartW}" y1="${gy}" y2="${gy}"/>` +
+               `<text class="ac-axis" x="${padL - 6}" y="${gy + 3}" text-anchor="end">${val}</text>`;
+  }
+
+  // Подписи времени (24ч назад / 12ч назад / сейчас)
+  gridSvg += `<text class="ac-axis" x="${x(0)}"  y="${H - 5}" text-anchor="start">−24ч</text>`;
+  gridSvg += `<text class="ac-axis" x="${x(12)}" y="${H - 5}" text-anchor="middle">−12ч</text>`;
+  gridSvg += `<text class="ac-axis" x="${x(23)}" y="${H - 5}" text-anchor="end">сейчас</text>`;
+
+  // Линии серий
+  let linesSvg = '';
+  for (const s of ACTIVITY_SERIES) {
+    if (_activityOff.has(s.key)) continue;
+    const arr = activity[s.key] || Array(24).fill(0);
+    const pts = arr.map((v, i) => `${x(i)},${y(v)}`).join(' ');
+    const areaPath =
+      `M ${x(0)},${padT + chartH} ` +
+      arr.map((v, i) => `L ${x(i)},${y(v)}`).join(' ') +
+      ` L ${x(23)},${padT + chartH} Z`;
+    linesSvg +=
+      `<path class="ac-area" d="${areaPath}" fill="${s.color}"/>` +
+      `<polyline class="ac-line" points="${pts}" stroke="${s.color}"/>`;
+  }
+
+  // Вертикальная линия hover + точки + tooltip
+  const svg =
+    `<svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">` +
+      gridSvg +
+      linesSvg +
+      `<line id="ac-hover-line" x1="0" x2="0" y1="${padT}" y2="${padT + chartH}" ` +
+        `stroke="var(--border2)" stroke-width="1" opacity="0"/>` +
+      `<g id="ac-points"></g>` +
+      `<rect class="ac-hover-rect" x="${padL}" y="${padT}" ` +
+        `width="${chartW}" height="${chartH}"/>` +
+    `</svg>` +
+    `<div class="ac-tooltip" id="ac-tooltip"></div>`;
+
+  host.innerHTML = svg;
+
+  // Hover logic
+  const rect = host.querySelector('.ac-hover-rect');
+  const tooltip = host.querySelector('#ac-tooltip');
+  const hoverLine = host.querySelector('#ac-hover-line');
+  const pointsG = host.querySelector('#ac-points');
+
+  function onMove(ev) {
+    const svgEl = host.querySelector('svg');
+    const box = svgEl.getBoundingClientRect();
+    const relX = ev.clientX - box.left;
+    const scale = W / box.width;
+    const svgX = relX * scale;
+    let idx = Math.round((svgX - padL) / step);
+    if (idx < 0) idx = 0; if (idx > 23) idx = 23;
+
+    hoverLine.setAttribute('x1', x(idx));
+    hoverLine.setAttribute('x2', x(idx));
+    hoverLine.setAttribute('opacity', '1');
+
+    let ptsHtml = '';
+    let rowsHtml = '';
+    for (const s of ACTIVITY_SERIES) {
+      if (_activityOff.has(s.key)) continue;
+      const v = (activity[s.key] || [])[idx] || 0;
+      ptsHtml += `<circle cx="${x(idx)}" cy="${y(v)}" r="3.5" fill="${s.color}" stroke="var(--bg2)" stroke-width="1.5"/>`;
+      rowsHtml +=
+        `<div class="ac-tt-row"><span class="ac-tt-sw" style="background:${s.color}"></span>` +
+        `${s.label}: <b>${v}</b></div>`;
+    }
+    pointsG.innerHTML = ptsHtml;
+
+    const hoursAgo = 23 - idx;
+    const label = hoursAgo === 0 ? 'сейчас' :
+                  hoursAgo === 1 ? '1 час назад' :
+                  `${hoursAgo} ч назад`;
+    tooltip.innerHTML = `<div class="ac-tt-time">${label}</div>${rowsHtml}`;
+    tooltip.classList.add('show');
+    const hostBox = host.getBoundingClientRect();
+    tooltip.style.left = ((x(idx) / W) * 100) + '%';
+    tooltip.style.top  = (padT + 4) + 'px';
+  }
+  function onLeave() {
+    tooltip.classList.remove('show');
+    hoverLine.setAttribute('opacity', '0');
+    pointsG.innerHTML = '';
+  }
+  rect.addEventListener('mousemove', onMove);
+  rect.addEventListener('mouseleave', onLeave);
+
+  // Legend
+  const legend = document.getElementById('activity-legend');
+  if (legend) {
+    legend.innerHTML = ACTIVITY_SERIES.map(s => {
+      const off = _activityOff.has(s.key) ? ' off' : '';
+      return `<div class="al-item${off}" data-key="${s.key}">` +
+             `<span class="al-sw" style="background:${s.color}"></span>${s.label}</div>`;
+    }).join('');
+    legend.querySelectorAll('.al-item').forEach(el => {
+      el.addEventListener('click', () => {
+        const k = el.dataset.key;
+        if (_activityOff.has(k)) _activityOff.delete(k); else _activityOff.add(k);
+        _persistActivityOff();
+        renderActivityChart(activity);
+      });
+    });
+  }
+}
+
+// ─── Статус-полоса внизу ────────────────────────────────────────────────────
+let _lastEventAt = null;
+let _statusBarTicker = null;
+
+function _setLastEvent(ts) {
+  _lastEventAt = ts || Date.now();
+}
+
+function _formatAgo(ts) {
+  if (!ts) return '—';
+  const sec = Math.max(0, Math.round((Date.now() - ts) / 1000));
+  if (sec < 5)     return 'только что';
+  if (sec < 60)   return sec + ' с назад';
+  const min = Math.floor(sec / 60);
+  if (min < 60)   return min + ' мин назад';
+  const h = Math.floor(min / 60);
+  if (h < 24)     return h + ' ч назад';
+  return Math.floor(h / 24) + ' д назад';
+}
+
+function updateStatusBar(d) {
+  const ver = document.getElementById('sb-version');
+  if (ver) {
+    const vlabel = document.getElementById('ver-label');
+    const txt = (vlabel && vlabel.textContent) ? vlabel.textContent.trim() : '';
+    if (txt && ver.textContent !== txt) ver.textContent = txt;
+  }
+
+  // VPS состояние — считаем по статусу бота
+  const vpsDot = document.getElementById('sb-vps-dot');
+  const vpsState = document.getElementById('sb-vps-state');
+  if (d && d.status) {
+    const okStates = { running: ['ok', 'активен'], connecting: ['warn', 'подключение'],
+                       stopped: ['warn', 'остановлен'], error: ['err', 'ошибка'] };
+    const [cls, label] = okStates[d.status] || ['', d.status];
+    if (vpsDot) vpsDot.className = 'sb-dot ' + cls;
+    if (vpsState) vpsState.textContent = label;
+  }
+
+  // FunPay аккаунт
+  const fpDot = document.getElementById('sb-fp-dot');
+  const fpState = document.getElementById('sb-fp-state');
+  if (d && d.account && d.account.username) {
+    if (fpDot) fpDot.className = 'sb-dot ok';
+    if (fpState) fpState.textContent = d.account.username;
+  } else {
+    if (fpDot) fpDot.className = 'sb-dot';
+    if (fpState) fpState.textContent = 'не подключён';
+  }
+}
+
+function _tickStatusBar() {
+  const el = document.getElementById('sb-last-event');
+  if (el) el.textContent = _formatAgo(_lastEventAt);
+}
+
+function _startStatusBarTicker() {
+  if (_statusBarTicker) return;
+  _statusBarTicker = setInterval(_tickStatusBar, 1000);
+  _tickStatusBar();
+}
+_onReady(_startStatusBarTicker);
+
+// ─── Ping monitor (VPS latency) ─────────────────────────────────────────────
+async function _pingVps() {
+  const base = getApiBase();
+  if (!base) return;
+  const el = document.getElementById('sb-ping');
+  try {
+    const t0 = performance.now();
+    const res = await fetch(base.replace(/\/+$/, '') + '/ping', {
+      method: 'GET', cache: 'no-store',
+    });
+    const dt = Math.round(performance.now() - t0);
+    if (el) el.textContent = res.ok ? (dt + ' ms') : 'нет связи';
+  } catch (_) {
+    if (el) el.textContent = 'нет связи';
+  }
+}
+setInterval(_pingVps, 15000);
+_onReady(() => { setTimeout(_pingVps, 1500); });
 
 // ─── Raise countdown ─────────────────────────────────────────────────────────
 function startRaiseCountdown(secondsFromNow) {
@@ -294,6 +567,9 @@ function connectWS() {
       allLogs.push(entry);
       if (allLogs.length > 2000) allLogs.shift();
       appendLog(entry);
+
+      // Обновляем «последнее событие» в нижней статус-полосе
+      _setLastEvent(Date.now());
 
       // FIX: уведомление при новом заказе через WS
       if (entry.category === 'new_order') {
@@ -1141,6 +1417,8 @@ electron.onBackendStatus(({ ready, error }) => {
 (async () => {
   const ver = await electron.version();
   document.getElementById('ver-label').textContent = 'v' + ver;
+  const sbv = document.getElementById('sb-version');
+  if (sbv) sbv.textContent = 'v' + ver;
 
   const ready = await electron.backendReady();
   if (ready) {
