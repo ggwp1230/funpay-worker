@@ -1,6 +1,6 @@
 {
   "name": "fp-nexus",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "FP Nexus — автоматизация FunPay",
   "main": "electron/main.js",
   "author": "FunPay Bot",

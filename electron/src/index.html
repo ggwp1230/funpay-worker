@@ -51,55 +51,67 @@
 <div id="app">
   <!-- SIDEBAR -->
   <nav id="sidebar">
-    <div class="nav-section">Меню</div>
-    <div class="nav-item active" id="nav-dashboard" onclick="go('dashboard')">
-      <span class="nav-icon">◈</span> Дашборд
+    <button class="sb-collapse" onclick="toggleSidebar()" title="Свернуть меню">
+      <span class="sb-collapse-icon">«</span>
+    </button>
+
+    <div class="nav-section">Активность</div>
+    <div class="nav-item active" id="nav-dashboard" onclick="go('dashboard')" data-label="Дашборд">
+      <span class="nav-icon">◈</span><span class="nav-label">Дашборд</span>
     </div>
-    <div class="nav-item" id="nav-logs" onclick="go('logs')">
-      <span class="nav-icon">≡</span> Логи
+    <div class="nav-item" id="nav-logs" onclick="go('logs')" data-label="Логи">
+      <span class="nav-icon">≡</span><span class="nav-label">Логи</span>
     </div>
-    <div class="nav-item" id="nav-ar" onclick="go('ar')">
-      <span class="nav-icon">↩</span> Авто-ответы
+
+    <div class="nav-sep"></div>
+    <div class="nav-section">Автоматизация</div>
+    <div class="nav-item" id="nav-ar" onclick="go('ar')" data-label="Авто-ответы">
+      <span class="nav-icon">↩</span><span class="nav-label">Авто-ответы</span>
     </div>
-    <div class="nav-item" id="nav-raise" onclick="go('raise')">
-      <span class="nav-icon">↑</span> Авто-поднятие
+    <div class="nav-item" id="nav-raise" onclick="go('raise')" data-label="Авто-поднятие">
+      <span class="nav-icon">↑</span><span class="nav-label">Авто-поднятие</span>
     </div>
-    <div class="nav-item" id="nav-settings" onclick="go('settings')">
-      <span class="nav-icon">⊙</span> Настройки
+    <div class="nav-item" id="nav-blacklist" onclick="go('blacklist')" data-label="Чёрный список">
+      <span class="nav-icon">🚫</span><span class="nav-label">Чёрный список</span>
     </div>
-    <div class="nav-item" id="nav-blacklist" onclick="go('blacklist')">
-      <span class="nav-icon">🚫</span> Чёрный список
+    <div class="nav-item" id="nav-notify" onclick="go('notify')" data-label="Уведомления">
+      <span class="nav-icon">🔔</span><span class="nav-label">Уведомления</span>
     </div>
-    <div class="nav-item" id="nav-notify" onclick="go('notify')">
-      <span class="nav-icon">🔔</span> Уведомления
+
+    <div class="nav-sep"></div>
+    <div class="nav-section">Настройки</div>
+    <div class="nav-item" id="nav-settings" onclick="go('settings')" data-label="Настройки">
+      <span class="nav-icon">⊙</span><span class="nav-label">Настройки</span>
     </div>
-    <div class="nav-item" id="nav-backup" onclick="go('backup')">
-      <span class="nav-icon">💾</span> Бэкапы
+    <div class="nav-item" id="nav-backup" onclick="go('backup')" data-label="Бэкапы">
+      <span class="nav-icon">💾</span><span class="nav-label">Бэкапы</span>
     </div>
 
     <!-- Страница «Обновления» скрыта: .exe обновляется через переустановку,
          VPS — через cron git pull. Старая OTA для бэкенда более неактуальна. -->
     <div class="nav-item" id="nav-update" onclick="go('update')" style="display:none">
-      <span class="nav-icon" id="update-nav-icon">↑</span> Обновления
+      <span class="nav-icon" id="update-nav-icon">↑</span><span class="nav-label">Обновления</span>
     </div>
 
-    <div class="nav-item" id="nav-plugins" onclick="go('plugins')">
-      <span class="nav-icon">🧩</span> Плагины
+    <div class="nav-sep"></div>
+    <div class="nav-section">Расширения</div>
+    <div class="nav-item" id="nav-plugins" onclick="go('plugins')" data-label="Плагины">
+      <span class="nav-icon">🧩</span><span class="nav-label">Плагины</span>
     </div>
 
     <div class="nav-sep"></div>
     <div class="nav-section">Управление</div>
-    <div class="nav-item" id="nav-start" onclick="startBot()">
-      <span class="nav-icon" style="color:var(--green)">▷</span> Запустить
+    <div class="nav-item" id="nav-start" onclick="startBot()" data-label="Запустить">
+      <span class="nav-icon" style="color:var(--green)">▷</span><span class="nav-label">Запустить</span>
     </div>
-    <div class="nav-item" id="nav-stop" onclick="stopBot()">
-      <span class="nav-icon" style="color:var(--red)">□</span> Остановить
+    <div class="nav-item" id="nav-stop" onclick="stopBot()" data-label="Остановить">
+      <span class="nav-icon" style="color:var(--red)">□</span><span class="nav-label">Остановить</span>
     </div>
 
     <div class="sidebar-footer">
       <div class="text-dim" id="ver-label">v1.0.0</div>
       <button class="btn-logout" onclick="logout()" title="Выйти из FunPay-аккаунта (очистить golden_key)">
-        ⏏ Выйти
+        <span class="bl-icon">⏏</span><span class="nav-label">Выйти</span>
       </button>
     </div>
   </nav>
@@ -127,6 +139,19 @@
               <div style="color:var(--muted);font-size:11px">Укажите golden_key в Настройках и нажмите «Подключить»</div>
             </div>
           </div>
+        </div>
+      </div>
+
+      <!-- Активность бота за последние 24 часа -->
+      <div class="card activity-card">
+        <div class="card-hd">
+          <div class="card-title">
+            <span class="ac-ic">📈</span> Активность за 24 часа
+          </div>
+          <div class="activity-legend" id="activity-legend"></div>
+        </div>
+        <div class="activity-chart" id="activity-chart">
+          <div class="skeleton skeleton-chart"></div>
         </div>
       </div>
 
@@ -575,6 +600,33 @@
 
   </div><!-- /content -->
 </div><!-- /app -->
+
+<!-- STATUS BAR — тонкая полоса внизу со всеми ключевыми метриками -->
+<div id="statusbar">
+  <div class="sb-item" title="Версия приложения">
+    <span class="sb-dot sb-dot-accent"></span>
+    <span id="sb-version">v—</span>
+  </div>
+  <div class="sb-item" title="Статус VPS-воркера">
+    <span class="sb-dot" id="sb-vps-dot"></span>
+    <span>VPS</span>
+    <span class="sb-val" id="sb-vps-state">—</span>
+  </div>
+  <div class="sb-item" title="Пинг до VPS">
+    <span>🛰</span>
+    <span class="sb-val" id="sb-ping">— ms</span>
+  </div>
+  <div class="sb-item" title="Статус FunPay-аккаунта">
+    <span class="sb-dot" id="sb-fp-dot"></span>
+    <span>FunPay</span>
+    <span class="sb-val" id="sb-fp-state">—</span>
+  </div>
+  <div class="sb-spacer"></div>
+  <div class="sb-item" id="sb-last-event-wrap" title="Последнее событие">
+    <span>◔</span>
+    <span class="sb-val" id="sb-last-event">—</span>
+  </div>
+</div>
 
 <div id="toast"></div>
 
