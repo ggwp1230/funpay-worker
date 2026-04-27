@@ -770,8 +770,19 @@ async function obConnect() {
   } catch (_) {}
 
   // Проверяем — может быть golden_key уже сохранён на VPS (например после
-  // переустановки приложения). В таком случае скипаем шаг ввода ключа.
-  if (probe.data && probe.data.has_key) {
+  // переустановки приложения / закрытия через диспетчер задач). В таком
+  // случае скипаем шаг ввода ключа. has_key живёт в /api/config (НЕ в
+  // /api/status), поэтому делаем отдельный запрос.
+  let hasKey = false;
+  try {
+    const r = await fetch(host + '/api/config', { headers: { 'X-Token': token } });
+    if (r.ok) {
+      const cfg = await r.json();
+      hasKey = !!(cfg && cfg.has_key);
+    }
+  } catch (_) {}
+
+  if (hasKey) {
     document.getElementById('onboarding').style.display = 'none';
     setTimeout(connectWS, 500);
     setTimeout(updateStatus, 800);
