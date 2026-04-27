@@ -1146,12 +1146,21 @@ async function loadPluginReviewsAdmin(pid) {{
   wrap.innerHTML = list.map(rv => `
     <div class="plugin-row" style="margin-bottom:4px">
       <div>
-        <div class="pid">${{'★'.repeat(rv.rating||0)}}${{'☆'.repeat(5-(rv.rating||0))}} <span style="color:var(--dim);font-weight:400">${{rv.author||'Аноним'}}</span></div>
-        <div class="pmeta" style="color:var(--text);margin-top:2px;white-space:pre-wrap">${{(rv.text||'').replace(/</g,'&lt;')}}</div>
+        <div class="pid">${{'★'.repeat(Math.max(0,Math.min(5,rv.rating||0)))}}${{'☆'.repeat(5-Math.max(0,Math.min(5,rv.rating||0)))}} <span style="color:var(--dim);font-weight:400">${{_esc(rv.author||'Аноним')}}</span></div>
+        <div class="pmeta" style="color:var(--text);margin-top:2px;white-space:pre-wrap">${{_esc(rv.text||'')}}</div>
       </div>
-      <button class="btn btn-danger btn-sm" onclick="deleteReview('${{rv.id}}')">×</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteReview('${{_jsAttr(rv.id||'')}}')">×</button>
     </div>
   `).join('');
+}}
+
+function _esc(s) {{
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}}
+function _jsAttr(s) {{
+  return String(s == null ? '' : s).replace(/\\\\/g,'\\\\\\\\').replace(/'/g,'\\\\x27');
 }}
 
 async function deleteReview(rid) {{
