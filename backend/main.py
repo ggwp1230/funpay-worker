@@ -1024,12 +1024,25 @@ class FPNexus:
         }
 
     def get_categories(self) -> list:
-        """Возвращает список категорий аккаунта для отображения в UI."""
+        """Возвращает категории, в которых у пользователя есть свои лоты.
+
+        Раньше тут возвращались все категории FunPay (тысячи позиций) — это
+        бессмысленно для UI авто-поднятия, юзеру нужны только те игры, где
+        у него реально что-то выставлено.
+        """
         if not self.account or not self.account.is_initiated:
             return []
         try:
-            return [{"id": c.id, "name": c.name} for c in self.account.categories]
-        except Exception:
+            profile = self.account.get_user(self.account.id)
+            seen: dict[int, str] = {}
+            for lot in profile.get_lots():
+                cat = getattr(lot.subcategory, "category", None)
+                if cat is None or cat.id in seen:
+                    continue
+                seen[cat.id] = cat.name
+            return [{"id": cid, "name": cname} for cid, cname in seen.items()]
+        except Exception as e:
+            logger.error("get_categories failed: %s", e)
             return []
 
 

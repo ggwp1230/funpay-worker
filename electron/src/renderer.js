@@ -47,6 +47,27 @@ function toast(msg, type = '') {
   toast._t = setTimeout(() => el.className = '', 3500);
 }
 
+// ─── Стилизованный confirm — заменяет нативный browser confirm() ─────────────
+let _confirmResolve = null;
+function _confirmCancel() {
+  document.getElementById('confirm-modal').style.display = 'none';
+  if (_confirmResolve) { _confirmResolve(false); _confirmResolve = null; }
+}
+function _confirmOk() {
+  document.getElementById('confirm-modal').style.display = 'none';
+  if (_confirmResolve) { _confirmResolve(true); _confirmResolve = null; }
+}
+function confirmModal(message, opts = {}) {
+  const m = document.getElementById('confirm-modal');
+  document.getElementById('confirm-title').textContent = opts.title || 'Подтверждение';
+  document.getElementById('confirm-body').textContent = message;
+  const okBtn = document.getElementById('confirm-ok');
+  okBtn.textContent = opts.okText || 'OK';
+  okBtn.classList.toggle('btn-danger', !!opts.danger);
+  m.style.display = 'flex';
+  return new Promise((res) => { _confirmResolve = res; });
+}
+
 // ─── Desktop notification ────────────────────────────────────────────────────
 function requestNotifPermission() {
   if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
@@ -935,7 +956,7 @@ async function _autoResumeBot(host, token, statusData) {
 
 // ─── Logout ──────────────────────────────────────────────────────────────────
 async function logout() {
-  if (!confirm('Выйти? Бот остановится на VPS, golden_key и адрес будут забыты. Чтобы вернуться — введите токен и адрес снова.')) return;
+  if (!await confirmModal('Бот остановится на VPS, golden_key и адрес будут забыты. Чтобы вернуться — введите токен и адрес снова.', {title:'Выйти из аккаунта?', okText:'Выйти', danger:true})) return;
   // Останавливаем бота на VPS и стираем golden_key с него.
   try { await api('/api/stop', { method: 'POST' }); } catch(_){}
   try { await apiPost('/api/config', { data: { golden_key: '' } }); } catch(_){}
@@ -967,7 +988,7 @@ async function logout() {
 }
 
 async function deleteGoldenKey() {
-  if (!confirm('Удалить golden_key? Бот остановится.')) return;
+  if (!await confirmModal('Бот будет остановлен. Чтобы войти снова — введите golden_key заново.', {title:'Удалить golden_key?', okText:'Удалить', danger:true})) return;
   if (_isVpsMode()) {
     // Чистим ключ на VPS
     await apiPost('/api/config', { data: { golden_key: '' } });
@@ -1219,7 +1240,7 @@ async function createBackupNow() {
 }
 
 async function restoreBackup(filename) {
-  if (!confirm(`Восстановить из ${filename}? Текущие настройки будут перезаписаны.`)) return;
+  if (!await confirmModal(`Текущие настройки будут перезаписаны данными из «${filename}».`, {title:'Восстановить бэкап?', okText:'Восстановить'})) return;
   const d = await apiPost('/api/backups/restore', { filename });
   toast(d?.message || 'Восстановлено', d?.ok ? 'ok' : 'err');
   if (d?.ok) loadSettings();
@@ -1271,9 +1292,10 @@ function renderInstalledRow(p) {
   // в inline-обработчиках. Они РАЗНЫЕ — последний экранирует одинарные кавычки.
   const idHtml = esc(p.id);
   const idJs = escJsAttr(p.id);
-  let badge = '<span class="pl-badge pl-badge-off">выкл</span>';
+  // Бейдж рисуем только при ошибке — статус вкл/выкл и так виден в правой
+  // колонке через toggle, чтобы не дублировать.
+  let badge = '';
   if (p.error) badge = '<span class="pl-badge pl-badge-err">ошибка</span>';
-  else if (p.enabled && p.loaded) badge = '<span class="pl-badge pl-badge-on">вкл</span>';
   const errBlock = p.error
     ? `<div class="pl-error">⚠ ${esc(p.error)}</div>`
     : '';
@@ -1317,7 +1339,7 @@ async function togglePlugin(id, enabled) {
 }
 
 async function uninstallPlugin(id) {
-  if (!confirm(`Удалить плагин ${id}? Его данные и настройки тоже будут стёрты.`)) return;
+  if (!await confirmModal(`Плагин «${id}» будет удалён вместе со всеми его данными и настройками.`, {title:'Удалить плагин?', okText:'Удалить', danger:true})) return;
   const d = await apiPost('/api/plugins/uninstall', { id });
   if (d && d.ok) {
     toast(`Плагин ${id} удалён`, 'ok');
