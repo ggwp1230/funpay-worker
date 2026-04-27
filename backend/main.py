@@ -406,7 +406,15 @@ class FPNexus:
         self.plugins: Optional[Any] = None
         if PLUGINS_AVAILABLE and PluginManager is not None:
             try:
-                plugins_dir = Path(__file__).parent / "plugins_data"
+                # Плагины храним в /app/config (= симлинк на data-volume),
+                # чтобы они переживали force-recreate контейнера и обновления
+                # образа. Локально (не-VPS) /app/config может не существовать —
+                # тогда падаем обратно на каталог рядом с main.py.
+                config_root = Path(__file__).parent / "config"
+                if config_root.exists():
+                    plugins_dir = config_root / "plugins"
+                else:
+                    plugins_dir = Path(__file__).parent / "plugins_data"
                 plugins_dir.mkdir(parents=True, exist_ok=True)
                 self.plugins = PluginManager(
                     plugins_dir=plugins_dir,
