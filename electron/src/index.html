@@ -578,6 +578,19 @@
 
 <div id="toast"></div>
 
+<!-- Универсальный confirm-модал — заменяет нативный browser confirm() -->
+<div id="confirm-modal" class="pl-modal" style="display:none" onclick="if(event.target===this)_confirmCancel()">
+  <div class="pl-modal-box" style="max-width:420px">
+    <div class="card-title" id="confirm-title" style="margin-bottom:10px">Подтверждение</div>
+    <div id="confirm-body" style="font-size:13px;color:var(--text);line-height:1.5;margin-bottom:18px"></div>
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn" id="confirm-cancel" onclick="_confirmCancel()"
+              style="background:var(--bg3);color:var(--text);border:1px solid var(--border)">Отмена</button>
+      <button class="btn btn-primary" id="confirm-ok" onclick="_confirmOk()">OK</button>
+    </div>
+  </div>
+</div>
+
 <script src="renderer.js"></script>
 
 <!-- ══════════════════════════════════════════════════════
