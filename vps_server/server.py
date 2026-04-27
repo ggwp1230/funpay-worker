@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -355,8 +356,139 @@ def delete_update(x_admin_token: Optional[str] = Header(None)):
 
 # ── Plugins helpers ────────────────────────────────────────────────────────────
 
+# Расширенные данные плагина (скриншоты, длинное описание, отзывы) живут
+# в отдельной поддиректории plugins/<id>/. Это отделено от основных
+# plugins/<id>.zip / plugins/<id>.json ради обратной совместимости — старый
+# клиент, который не знает о карточке деталей, получит те же поля что раньше.
 def _plugin_paths(plugin_id: str) -> tuple[Path, Path]:
     return PLUGINS_DIR / f"{plugin_id}.zip", PLUGINS_DIR / f"{plugin_id}.json"
+
+
+def _plugin_dir(plugin_id: str, create: bool = False) -> Path:
+    """Путь до директории с расширенными данными плагина. По умолчанию только
+    возвращает путь (без побочных эффектов), create=True — вызывается из
+    write-paths и создаёт директорию."""
+    d = PLUGINS_DIR / plugin_id
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _plugin_details_file(plugin_id: str, create: bool = False) -> Path:
+    """JSON с long_description, screenshots[], обновляется через админку."""
+    return _plugin_dir(plugin_id, create=create) / "details.json"
+
+
+def _plugin_reviews_file(plugin_id: str, create: bool = False) -> Path:
+    return _plugin_dir(plugin_id, create=create) / "reviews.json"
+
+
+def _plugin_downloads_file(plugin_id: str, create: bool = False) -> Path:
+    return _plugin_dir(plugin_id, create=create) / "downloads.json"
+
+
+def _plugin_icon_file(plugin_id: str) -> Optional[Path]:
+    d = _plugin_dir(plugin_id)
+    if not d.exists():
+        return None
+    for ext in ("png", "jpg", "jpeg", "webp"):
+        p = d / f"icon.{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+def _plugin_screenshot_file(plugin_id: str, n: int) -> Optional[Path]:
+    d = _plugin_dir(plugin_id)
+    if not d.exists():
+        return None
+    for ext in ("png", "jpg", "jpeg", "webp"):
+        p = d / f"s{n}.{ext}"
+        if p.exists():
+            return p
+    return None
+
+
+# Защита от гонок при read-modify-write на reviews.json / downloads.json.
+# FastAPI гоняет sync-хендлеры в thread pool — два POST /reviews на один и тот
+# же плагин могут стереть данные друг друга. Лочим отдельно per plugin_id,
+# чтобы разные плагины не блокировали друг друга.
+_plugin_locks_mu = threading.Lock()
+_plugin_locks: dict[str, threading.Lock] = {}
+
+
+def _plugin_lock(plugin_id: str) -> threading.Lock:
+    with _plugin_locks_mu:
+        lk = _plugin_locks.get(plugin_id)
+        if lk is None:
+            lk = threading.Lock()
+            _plugin_locks[plugin_id] = lk
+        return lk
+
+
+def _load_json(path: Path, default):
+    try:
+        if path.exists():
+            return json.loads(path.read_text())
+    except Exception:
+        pass
+    return default
+
+
+def _save_json(path: Path, data):
+    """Атомарная запись: tmp + rename, чтобы не оставить полу-файл при падении."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    os.replace(tmp, path)
+
+
+def _token_hash(token: str) -> str:
+    """Короткий детерминированный хеш токена — используется как псевдо-user-id
+    в отзывах (так можно проверять «один юзер = один отзыв» без хранения
+    самого токена в плейнтексте)."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()[:24]
+
+
+def _record_download(plugin_id: str, token: str):
+    """Отметка что token скачал плагин. Используется для проверки права
+    оставлять отзыв."""
+    if not token:
+        return
+    th = _token_hash(token)
+    path = _plugin_downloads_file(plugin_id, create=True)
+    with _plugin_lock(plugin_id):
+        data = _load_json(path, {})
+        if not isinstance(data, dict):
+            data = {}
+        if th not in data:
+            data[th] = {"first_at": time.time()}
+        data[th]["last_at"] = time.time()
+        _save_json(path, data)
+
+
+def _has_downloaded(plugin_id: str, token: str) -> bool:
+    th = _token_hash(token)
+    data = _load_json(_plugin_downloads_file(plugin_id), {})
+    return isinstance(data, dict) and th in data
+
+
+def _reviews_summary(plugin_id: str) -> dict:
+    """Сводка: кол-во отзывов, средний рейтинг, распределение по звёздам."""
+    reviews = _load_json(_plugin_reviews_file(plugin_id), [])
+    if not isinstance(reviews, list):
+        reviews = []
+    visible = [r for r in reviews if r.get("approved", True)]
+    dist = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
+    total = 0.0
+    for r in visible:
+        rr = int(r.get("rating") or 0)
+        if 1 <= rr <= 5:
+            dist[rr] = dist.get(rr, 0) + 1
+            total += rr
+    count = sum(dist.values())
+    avg = round(total / count, 2) if count else 0.0
+    return {"count": count, "avg": avg, "dist": dist}
 
 def _read_plugin_json(zip_bytes: bytes) -> dict:
     """Извлекает plugin.json из переданного zip-архива."""
@@ -397,9 +529,16 @@ def list_plugins() -> list[dict]:
     out = []
     for json_path in sorted(PLUGINS_DIR.glob("*.json")):
         try:
-            out.append(json.loads(json_path.read_text()))
+            meta = json.loads(json_path.read_text())
         except Exception:
             continue
+        pid = meta.get("id")
+        if pid:
+            meta["has_icon"] = _plugin_icon_file(pid) is not None
+            summary = _reviews_summary(pid)
+            meta["reviews_count"] = summary["count"]
+            meta["rating"] = summary["avg"]
+        out.append(meta)
     return out
 
 # ── Plugin endpoints ───────────────────────────────────────────────────────────
@@ -442,6 +581,153 @@ def admin_plugin_delete(plugin_id: str,
     zip_path, json_path = _plugin_paths(plugin_id)
     zip_path.unlink(missing_ok=True)
     json_path.unlink(missing_ok=True)
+    # Удаляем и расширенные данные (иконка, скриншоты, reviews, downloads).
+    pdir = PLUGINS_DIR / plugin_id
+    if pdir.exists() and pdir.is_dir():
+        shutil.rmtree(pdir, ignore_errors=True)
+    return {"ok": True}
+
+
+@app.post("/admin/plugins/{plugin_id}/details")
+async def admin_plugin_set_details(
+    plugin_id: str,
+    long_description: str = Form(""),
+    x_admin_token: Optional[str] = Header(None),
+):
+    require_admin(x_admin_token)
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    _, json_path = _plugin_paths(plugin_id)
+    if not json_path.exists():
+        raise HTTPException(404, "Плагин не найден")
+    path = _plugin_details_file(plugin_id, create=True)
+    with _plugin_lock(plugin_id):
+        details = _load_json(path, {})
+        if not isinstance(details, dict):
+            details = {}
+        details["long_description"] = (long_description or "").strip()[:20000]
+        details["updated_at"] = time.time()
+        _save_json(path, details)
+    return {"ok": True}
+
+
+def _write_image(target_dir: Path, base_name: str, upload: UploadFile, raw: bytes) -> Path:
+    """Сохраняет изображение, очищая старые версии того же base_name.*."""
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for ext in ("png", "jpg", "jpeg", "webp"):
+        old = target_dir / f"{base_name}.{ext}"
+        if old.exists():
+            old.unlink()
+    suffix = "png"
+    fn = (upload.filename or "").lower()
+    for ext in ("png", "jpg", "jpeg", "webp"):
+        if fn.endswith("." + ext):
+            suffix = ext
+            break
+    path = target_dir / f"{base_name}.{suffix}"
+    path.write_bytes(raw)
+    return path
+
+
+@app.post("/admin/plugins/{plugin_id}/icon")
+async def admin_plugin_upload_icon(
+    plugin_id: str,
+    file: UploadFile = File(...),
+    x_admin_token: Optional[str] = Header(None),
+):
+    require_admin(x_admin_token)
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    raw = await file.read()
+    if not raw or len(raw) > 2_000_000:
+        raise HTTPException(400, "Картинка пустая или больше 2 МБ")
+    _write_image(_plugin_dir(plugin_id, create=True), "icon", file, raw)
+    return {"ok": True}
+
+
+@app.delete("/admin/plugins/{plugin_id}/icon")
+def admin_plugin_delete_icon(plugin_id: str,
+                             x_admin_token: Optional[str] = Header(None)):
+    require_admin(x_admin_token)
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    icon = _plugin_icon_file(plugin_id)
+    if icon:
+        icon.unlink()
+    return {"ok": True}
+
+
+@app.post("/admin/plugins/{plugin_id}/screenshots")
+async def admin_plugin_upload_screenshot(
+    plugin_id: str,
+    slot: int = Form(...),
+    file: UploadFile = File(...),
+    x_admin_token: Optional[str] = Header(None),
+):
+    require_admin(x_admin_token)
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    if slot < 1 or slot > 20:
+        raise HTTPException(400, "Слот 1..20")
+    raw = await file.read()
+    if not raw or len(raw) > 5_000_000:
+        raise HTTPException(400, "Картинка пустая или больше 5 МБ")
+    _write_image(_plugin_dir(plugin_id, create=True), f"s{slot}", file, raw)
+    return {"ok": True, "slot": slot}
+
+
+@app.delete("/admin/plugins/{plugin_id}/screenshots/{slot}")
+def admin_plugin_delete_screenshot(plugin_id: str, slot: int,
+                                   x_admin_token: Optional[str] = Header(None)):
+    require_admin(x_admin_token)
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    shot = _plugin_screenshot_file(plugin_id, slot)
+    if shot:
+        shot.unlink()
+    return {"ok": True}
+
+
+@app.get("/admin/plugins/{plugin_id}/details")
+def admin_plugin_get_details(plugin_id: str,
+                             x_admin_token: Optional[str] = Header(None)):
+    require_admin(x_admin_token)
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    details = _load_json(_plugin_details_file(plugin_id), {})
+    if not isinstance(details, dict):
+        details = {}
+    screenshots = [n for n in range(1, 21) if _plugin_screenshot_file(plugin_id, n)]
+    return {
+        "long_description": details.get("long_description", ""),
+        "screenshots": screenshots,
+        "has_icon": _plugin_icon_file(plugin_id) is not None,
+    }
+
+
+@app.get("/admin/plugins/{plugin_id}/reviews")
+def admin_plugin_list_reviews(plugin_id: str,
+                              x_admin_token: Optional[str] = Header(None)):
+    require_admin(x_admin_token)
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    reviews = _load_json(_plugin_reviews_file(plugin_id), [])
+    return {"reviews": reviews}
+
+
+@app.delete("/admin/plugins/{plugin_id}/reviews/{review_id}")
+def admin_plugin_delete_review(plugin_id: str, review_id: str,
+                               x_admin_token: Optional[str] = Header(None)):
+    require_admin(x_admin_token)
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    path = _plugin_reviews_file(plugin_id)
+    with _plugin_lock(plugin_id):
+        reviews = _load_json(path, [])
+        if not isinstance(reviews, list):
+            reviews = []
+        new = [r for r in reviews if r.get("id") != review_id]
+        _save_json(path, new)
     return {"ok": True}
 
 @app.get("/plugins")
@@ -475,8 +761,185 @@ def public_plugin_download(plugin_id: str,
     zip_path, _ = _plugin_paths(plugin_id)
     if not zip_path.exists():
         raise HTTPException(404, "Плагин не найден")
+    _record_download(plugin_id, x_token or "")
     return FileResponse(zip_path, media_type="application/zip",
                         filename=f"{plugin_id}.zip")
+
+
+@app.get("/plugins/{plugin_id}/details")
+def public_plugin_details(plugin_id: str,
+                          x_token: Optional[str] = Header(None)):
+    """Полная карточка плагина: базовая мета + long_description + скриншоты +
+    сводка по отзывам. Используется витриной в приложении."""
+    valid, data = validate_fp_token(x_token or "")
+    if not valid:
+        raise HTTPException(403, data.get("error", "Invalid access token"))
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    _, json_path = _plugin_paths(plugin_id)
+    if not json_path.exists():
+        raise HTTPException(404, "Плагин не найден")
+    meta = json.loads(json_path.read_text())
+    details = _load_json(_plugin_details_file(plugin_id), {})
+    if not isinstance(details, dict):
+        details = {}
+    meta["long_description"] = details.get("long_description", "")
+    # Скриншоты: авто-индексируем по файлам s1.*, s2.*, ...
+    screenshots = []
+    for n in range(1, 21):
+        if _plugin_screenshot_file(plugin_id, n):
+            screenshots.append(n)
+    meta["screenshots"] = screenshots
+    meta["has_icon"] = _plugin_icon_file(plugin_id) is not None
+    summary = _reviews_summary(plugin_id)
+    meta["reviews_count"] = summary["count"]
+    meta["rating"] = summary["avg"]
+    meta["rating_dist"] = summary["dist"]
+    meta["downloaded"] = _has_downloaded(plugin_id, x_token or "")
+    return meta
+
+
+@app.get("/plugins/{plugin_id}/icon")
+def public_plugin_icon(plugin_id: str,
+                       x_token: Optional[str] = Header(None)):
+    valid, _d = validate_fp_token(x_token or "")
+    if not valid:
+        raise HTTPException(403, "Invalid access token")
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    icon = _plugin_icon_file(plugin_id)
+    if not icon:
+        raise HTTPException(404, "Иконка не задана")
+    return FileResponse(icon)
+
+
+@app.get("/plugins/{plugin_id}/screenshots/{n}")
+def public_plugin_screenshot(plugin_id: str, n: int,
+                             x_token: Optional[str] = Header(None)):
+    valid, _d = validate_fp_token(x_token or "")
+    if not valid:
+        raise HTTPException(403, "Invalid access token")
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    if n < 1 or n > 20:
+        raise HTTPException(400, "Невалидный номер")
+    shot = _plugin_screenshot_file(plugin_id, n)
+    if not shot:
+        raise HTTPException(404, "Скриншот не найден")
+    return FileResponse(shot)
+
+
+@app.get("/plugins/{plugin_id}/reviews")
+def public_plugin_reviews(plugin_id: str,
+                          x_token: Optional[str] = Header(None)):
+    valid, _d = validate_fp_token(x_token or "")
+    if not valid:
+        raise HTTPException(403, "Invalid access token")
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    reviews = _load_json(_plugin_reviews_file(plugin_id), [])
+    if not isinstance(reviews, list):
+        reviews = []
+    visible = [r for r in reviews if r.get("approved", True)]
+    # Сортируем от новых к старым. Кроме токена ничего чувствительного наружу
+    # не отдаём: юзер видит только author (отображаемое имя) + rating + text.
+    visible.sort(key=lambda r: r.get("created_at", 0), reverse=True)
+    my_hash = _token_hash(x_token or "") if x_token else ""
+    out = []
+    for r in visible:
+        out.append({
+            "id": r.get("id"),
+            "author": r.get("author") or "Аноним",
+            "rating": int(r.get("rating") or 0),
+            "text": r.get("text", ""),
+            "created_at": r.get("created_at", 0),
+            "mine": my_hash and r.get("token_hash") == my_hash,
+        })
+    summary = _reviews_summary(plugin_id)
+    return {
+        "reviews": out,
+        "count": summary["count"],
+        "avg": summary["avg"],
+        "dist": summary["dist"],
+        "can_review": _has_downloaded(plugin_id, x_token or ""),
+    }
+
+
+class ReviewPayload(BaseModel):
+    author: Optional[str] = None
+    rating: int
+    text: Optional[str] = None
+
+
+@app.post("/plugins/{plugin_id}/reviews")
+def public_plugin_post_review(plugin_id: str,
+                              body: ReviewPayload,
+                              x_token: Optional[str] = Header(None)):
+    valid, _d = validate_fp_token(x_token or "")
+    if not valid:
+        raise HTTPException(403, "Invalid access token")
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    _, json_path = _plugin_paths(plugin_id)
+    if not json_path.exists():
+        raise HTTPException(404, "Плагин не найден")
+    if not _has_downloaded(plugin_id, x_token or ""):
+        raise HTTPException(403, "Отзыв можно оставить только после установки плагина")
+    rating = int(body.rating or 0)
+    if rating < 1 or rating > 5:
+        raise HTTPException(400, "Рейтинг должен быть 1–5")
+    text = (body.text or "").strip()[:2000]
+    author = (body.author or "").strip()[:40] or "Аноним"
+
+    th = _token_hash(x_token or "")
+    path = _plugin_reviews_file(plugin_id, create=True)
+    with _plugin_lock(plugin_id):
+        reviews = _load_json(path, [])
+        if not isinstance(reviews, list):
+            reviews = []
+        # Upsert — один токен = один отзыв; повторная отправка обновляет.
+        now = time.time()
+        existing = next((r for r in reviews if r.get("token_hash") == th), None)
+        if existing:
+            existing.update({
+                "author": author, "rating": rating, "text": text,
+                "updated_at": now, "approved": existing.get("approved", True),
+            })
+            rid = existing.get("id")
+        else:
+            rid = hashlib.sha256(f"{th}-{now}".encode()).hexdigest()[:16]
+            reviews.append({
+                "id": rid,
+                "token_hash": th,
+                "author": author,
+                "rating": rating,
+                "text": text,
+                "created_at": now,
+                "approved": True,
+            })
+        _save_json(path, reviews)
+    return {"ok": True, "id": rid}
+
+
+@app.delete("/plugins/{plugin_id}/reviews/mine")
+def public_plugin_delete_my_review(plugin_id: str,
+                                   x_token: Optional[str] = Header(None)):
+    valid, _d = validate_fp_token(x_token or "")
+    if not valid:
+        raise HTTPException(403, "Invalid access token")
+    if not PLUGIN_ID_RE.match(plugin_id):
+        raise HTTPException(400, "Невалидный id")
+    th = _token_hash(x_token or "")
+    path = _plugin_reviews_file(plugin_id)
+    with _plugin_lock(plugin_id):
+        reviews = _load_json(path, [])
+        if not isinstance(reviews, list):
+            reviews = []
+        new = [r for r in reviews if r.get("token_hash") != th]
+        if len(new) == len(reviews):
+            raise HTTPException(404, "Отзыв не найден")
+        _save_json(path, new)
+    return {"ok": True}
 
 @app.get("/admin", response_class=HTMLResponse)
 def admin_panel():
@@ -574,6 +1037,36 @@ def admin_panel():
         <button class="btn btn-primary" onclick="uploadPlugin()">⬆ Загрузить плагин</button>
       </div>
       <div id="result3"></div>
+
+      <div id="edit-plugin-wrap" style="display:none;margin-top:22px;padding-top:18px;border-top:1px solid var(--border)">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <div style="font-size:14px;font-weight:600;color:var(--accent)">
+            Детали плагина: <span id="edit-plugin-id">—</span>
+          </div>
+          <button class="btn btn-sm" style="background:#0d1117;color:var(--text);border:1px solid var(--border)" onclick="closeEdit()">Закрыть</button>
+        </div>
+
+        <label>Подробное описание (markdown)</label>
+        <textarea id="edit-plugin-desc" style="height:120px" placeholder="Для чего нужен плагин, примеры использования, ограничения..."></textarea>
+        <button class="btn btn-primary btn-sm" onclick="saveDescription()">💾 Сохранить описание</button>
+
+        <label>Иконка (png/jpg/webp, до 2 МБ)</label>
+        <input type="file" id="edit-icon-file" accept="image/*" onchange="uploadIcon(event)" />
+
+        <label>Скриншоты работы</label>
+        <div style="font-size:11px;color:var(--dim);margin-bottom:4px" id="edit-shot-list">Скриншотов нет</div>
+        <div style="display:flex;gap:6px;align-items:center">
+          <label style="margin:0;width:60px">Слот:</label>
+          <input type="number" id="edit-shot-slot" min="1" max="20" value="1" style="width:70px" />
+          <input type="file" id="edit-shot-file" accept="image/*" onchange="uploadScreenshot(event)" style="flex:1" />
+          <button class="btn btn-danger btn-sm" onclick="deleteScreenshot()">Удалить слот</button>
+        </div>
+
+        <label style="margin-top:14px">Отзывы</label>
+        <div id="edit-plugin-reviews" style="max-height:220px;overflow-y:auto"></div>
+
+        <div id="edit-plugin-result" style="margin-top:10px;font-size:12px;min-height:16px"></div>
+      </div>
     </div>
   </div>
 </div>
@@ -602,13 +1095,117 @@ async function refreshPlugins() {{
   wrap.innerHTML = d.plugins.map(p => `
     <div class="plugin-row">
       <div>
-        <div class="pid">${{p.name}} <span style="color:var(--dim);font-weight:400">v${{p.version}}</span></div>
-        <div class="pmeta">${{p.id}} · ${{p.author||'—'}} · ${{Math.round((p.size||0)/1024)}} KB</div>
+        <div class="pid">${{p.name}} <span style="color:var(--dim);font-weight:400">v${{p.version}}</span>
+          ${{p.reviews_count ? `<span style="color:var(--dim);font-size:11px"> ★${{p.rating||0}} (${{p.reviews_count}})</span>` : ''}}
+        </div>
+        <div class="pmeta">${{p.id}} · ${{p.author||'—'}} · ${{Math.round((p.size||0)/1024)}} KB${{p.has_icon?' · иконка':''}}</div>
         ${{p.description ? `<div class="pmeta" style="color:var(--text);margin-top:4px">${{p.description}}</div>` : ''}}
       </div>
-      <button class="btn btn-danger btn-sm" onclick="deletePlugin('${{p.id}}')">Удалить</button>
+      <div style="display:flex;gap:6px">
+        <button class="btn btn-sm" style="background:var(--bg3,#0d1117);color:var(--text);border:1px solid var(--border)" onclick="editPlugin('${{p.id}}')">Детали</button>
+        <button class="btn btn-danger btn-sm" onclick="deletePlugin('${{p.id}}')">Удалить</button>
+      </div>
     </div>
   `).join('');
+}}
+
+async function editPlugin(pid) {{
+  _editingPlugin = pid;
+  document.getElementById('edit-plugin-id').textContent = pid;
+  document.getElementById('edit-plugin-wrap').style.display = 'block';
+  document.getElementById('edit-plugin-desc').value = '';
+  document.getElementById('edit-shot-slot').value = '1';
+  document.getElementById('edit-plugin-result').textContent = '';
+  try {{
+    const r = await fetch('/admin/plugins/' + encodeURIComponent(pid) + '/details',
+      {{headers:{{'x-admin-token':_token}}}});
+    if (r.ok) {{
+      const d = await r.json();
+      document.getElementById('edit-plugin-desc').value = d.long_description || '';
+      document.getElementById('edit-shot-list').textContent =
+        d.screenshots.length ? 'Скриншоты: ' + d.screenshots.join(', ') : 'Скриншотов нет';
+    }}
+  }} catch(_) {{}}
+  await loadPluginReviewsAdmin(pid);
+}}
+
+function closeEdit() {{
+  document.getElementById('edit-plugin-wrap').style.display = 'none';
+  _editingPlugin = null;
+}}
+let _editingPlugin = null;
+
+async function saveDescription() {{
+  if (!_editingPlugin) return;
+  const fd = new FormData();
+  fd.append('long_description', document.getElementById('edit-plugin-desc').value);
+  const r = await fetch('/admin/plugins/' + encodeURIComponent(_editingPlugin) + '/details',
+    {{method:'POST',headers:{{'x-admin-token':_token}},body:fd}});
+  const el = document.getElementById('edit-plugin-result');
+  el.textContent = r.ok ? 'Описание сохранено' : 'Ошибка';
+  el.style.color = r.ok ? 'var(--green)' : 'var(--red)';
+}}
+
+async function uploadIcon(ev) {{
+  const f = ev.target.files[0]; if (!f || !_editingPlugin) return;
+  const fd = new FormData(); fd.append('file', f);
+  const r = await fetch('/admin/plugins/' + encodeURIComponent(_editingPlugin) + '/icon',
+    {{method:'POST',headers:{{'x-admin-token':_token}},body:fd}});
+  document.getElementById('edit-plugin-result').textContent = r.ok ? 'Иконка загружена' : 'Ошибка загрузки иконки';
+  refreshPlugins();
+}}
+
+async function uploadScreenshot(ev) {{
+  const f = ev.target.files[0]; if (!f || !_editingPlugin) return;
+  const slot = parseInt(document.getElementById('edit-shot-slot').value || '1', 10);
+  const fd = new FormData(); fd.append('file', f); fd.append('slot', String(slot));
+  const r = await fetch('/admin/plugins/' + encodeURIComponent(_editingPlugin) + '/screenshots',
+    {{method:'POST',headers:{{'x-admin-token':_token}},body:fd}});
+  document.getElementById('edit-plugin-result').textContent = r.ok ? `Скриншот #${{slot}} загружен` : 'Ошибка';
+}}
+
+async function deleteScreenshot() {{
+  if (!_editingPlugin) return;
+  const slot = parseInt(document.getElementById('edit-shot-slot').value || '1', 10);
+  const r = await fetch('/admin/plugins/' + encodeURIComponent(_editingPlugin) + '/screenshots/' + slot,
+    {{method:'DELETE',headers:{{'x-admin-token':_token}}}});
+  document.getElementById('edit-plugin-result').textContent = r.ok ? `Скриншот #${{slot}} удалён` : 'Ошибка';
+}}
+
+async function loadPluginReviewsAdmin(pid) {{
+  const wrap = document.getElementById('edit-plugin-reviews');
+  const r = await fetch('/admin/plugins/' + encodeURIComponent(pid) + '/reviews',
+    {{headers:{{'x-admin-token':_token}}}});
+  if (!r.ok) {{ wrap.innerHTML = '<div class="err" style="display:block">Не удалось загрузить</div>'; return; }}
+  const d = await r.json();
+  const list = d.reviews || [];
+  if (!list.length) {{ wrap.innerHTML = '<div style="color:var(--dim);font-size:11px">Отзывов пока нет</div>'; return; }}
+  wrap.innerHTML = list.map(rv => `
+    <div class="plugin-row" style="margin-bottom:4px">
+      <div>
+        <div class="pid">${{'★'.repeat(Math.max(0,Math.min(5,rv.rating||0)))}}${{'☆'.repeat(5-Math.max(0,Math.min(5,rv.rating||0)))}} <span style="color:var(--dim);font-weight:400">${{_esc(rv.author||'Аноним')}}</span></div>
+        <div class="pmeta" style="color:var(--text);margin-top:2px;white-space:pre-wrap">${{_esc(rv.text||'')}}</div>
+      </div>
+      <button class="btn btn-danger btn-sm" onclick="deleteReview('${{_jsAttr(rv.id||'')}}')">×</button>
+    </div>
+  `).join('');
+}}
+
+function _esc(s) {{
+  return String(s == null ? '' : s)
+    .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+}}
+function _jsAttr(s) {{
+  return String(s == null ? '' : s).replace(/\\\\/g,'\\\\\\\\').replace(/'/g,'\\\\x27');
+}}
+
+async function deleteReview(rid) {{
+  if (!_editingPlugin) return;
+  if (!confirm('Удалить отзыв?')) return;
+  const r = await fetch('/admin/plugins/' + encodeURIComponent(_editingPlugin) + '/reviews/' + encodeURIComponent(rid),
+    {{method:'DELETE',headers:{{'x-admin-token':_token}}}});
+  if (r.ok) loadPluginReviewsAdmin(_editingPlugin);
 }}
 async function uploadPlugin() {{
   const file = document.getElementById('plugin-file').files[0];

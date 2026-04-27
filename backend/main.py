@@ -1472,6 +1472,103 @@ def plugins_store():
         raise HTTPException(r.status_code, r.text[:200])
     return r.json()
 
+
+@app.get("/api/plugins/store/{plugin_id}/details")
+def plugins_store_details(plugin_id: str):
+    import requests
+    url, _, headers = _vps_session()
+    try:
+        r = requests.get(f"{url}/plugins/{plugin_id}/details",
+                         headers=headers, timeout=15)
+    except Exception as e:
+        raise HTTPException(502, f"VPS недоступен: {e}")
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text[:200])
+    return r.json()
+
+
+@app.get("/api/plugins/store/{plugin_id}/reviews")
+def plugins_store_reviews(plugin_id: str):
+    import requests
+    url, _, headers = _vps_session()
+    try:
+        r = requests.get(f"{url}/plugins/{plugin_id}/reviews",
+                         headers=headers, timeout=15)
+    except Exception as e:
+        raise HTTPException(502, f"VPS недоступен: {e}")
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text[:200])
+    return r.json()
+
+
+class PluginReviewBody(BaseModel):
+    author: Optional[str] = None
+    rating: int
+    text: Optional[str] = None
+
+
+@app.post("/api/plugins/store/{plugin_id}/reviews")
+def plugins_store_post_review(plugin_id: str, body: PluginReviewBody):
+    import requests
+    url, _, headers = _vps_session()
+    try:
+        r = requests.post(f"{url}/plugins/{plugin_id}/reviews",
+                          headers={**headers, "Content-Type": "application/json"},
+                          data=body.model_dump_json(),
+                          timeout=15)
+    except Exception as e:
+        raise HTTPException(502, f"VPS недоступен: {e}")
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text[:200])
+    return r.json()
+
+
+@app.delete("/api/plugins/store/{plugin_id}/reviews/mine")
+def plugins_store_delete_my_review(plugin_id: str):
+    import requests
+    url, _, headers = _vps_session()
+    try:
+        r = requests.delete(f"{url}/plugins/{plugin_id}/reviews/mine",
+                            headers=headers, timeout=15)
+    except Exception as e:
+        raise HTTPException(502, f"VPS недоступен: {e}")
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, r.text[:200])
+    return r.json()
+
+
+@app.get("/api/plugins/store/{plugin_id}/icon")
+def plugins_store_icon(plugin_id: str):
+    """Проксирует иконку плагина. Возвращает байты картинки."""
+    import requests
+    from fastapi.responses import Response
+    url, _, headers = _vps_session()
+    try:
+        r = requests.get(f"{url}/plugins/{plugin_id}/icon",
+                         headers=headers, timeout=15)
+    except Exception as e:
+        raise HTTPException(502, f"VPS недоступен: {e}")
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, "Иконка недоступна")
+    return Response(content=r.content,
+                    media_type=r.headers.get("content-type", "image/png"))
+
+
+@app.get("/api/plugins/store/{plugin_id}/screenshots/{n}")
+def plugins_store_screenshot(plugin_id: str, n: int):
+    import requests
+    from fastapi.responses import Response
+    url, _, headers = _vps_session()
+    try:
+        r = requests.get(f"{url}/plugins/{plugin_id}/screenshots/{n}",
+                         headers=headers, timeout=15)
+    except Exception as e:
+        raise HTTPException(502, f"VPS недоступен: {e}")
+    if r.status_code != 200:
+        raise HTTPException(r.status_code, "Скриншот недоступен")
+    return Response(content=r.content,
+                    media_type=r.headers.get("content-type", "image/png"))
+
 @app.post("/api/plugins/install")
 def plugins_install(body: PluginIdBody):
     import requests

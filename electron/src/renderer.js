@@ -1649,23 +1649,27 @@ async function loadPluginStore() {
 function renderStoreRow(p) {
   const idHtml = esc(p.id);
   const idJs = escJsAttr(p.id);
-  const desc = p.description
-    ? `<div class="pl-desc">${esc(p.description)}</div>` : '';
-  const author = p.author ? ` · ${esc(p.author)}` : '';
-  const sizeKb = p.size ? ` · ${(p.size / 1024).toFixed(1)} КБ` : '';
+  const author = p.author ? esc(p.author) : '—';
+  const rating = (typeof p.rating === 'number' && p.rating > 0)
+    ? `<span class="pl-rating">★ ${p.rating.toFixed(1)}</span>
+       <span class="pl-rcount">· ${p.reviews_count || 0} отзыв(ов)</span>`
+    : '<span class="pl-rating-none">Без отзывов</span>';
+  // Иконка: если на сервере есть, тянем через прокси /api/plugins/store/<id>/icon,
+  // иначе — плейсхолдер с первой буквой имени.
+  const iconHtml = p.has_icon
+    ? `<img src="${getApiBase()}/api/plugins/store/${encodeURIComponent(p.id)}/icon" alt=""/>`
+    : `<div class="pl-ico-ph">${esc(((p.name||p.id)[0]||'?').toUpperCase())}</div>`;
   return `
-    <div class="plugin-row">
-      <div class="pl-main">
-        <div class="pl-name">
-          ${esc(p.name || p.id)}
+    <div class="plugin-card" onclick="openPluginDetails('${idJs}')">
+      <div class="pl-ico">${iconHtml}</div>
+      <div class="pl-card-main">
+        <div class="pl-card-title">${esc(p.name || p.id)}
           <span class="pl-ver">v${esc(p.version || '?')}</span>
         </div>
-        <div class="pl-meta">${idHtml}${author}${sizeKb}</div>
-        ${desc}
+        <div class="pl-card-author">${author}</div>
+        <div class="pl-card-rating">${rating}</div>
       </div>
-      <div class="pl-actions">
-        <button class="btn btn-sm btn-primary" onclick="installPlugin('${idJs}')">⬇ Установить</button>
-      </div>
+      <div class="pl-card-arrow">→</div>
     </div>`;
 }
 
@@ -1675,9 +1679,247 @@ async function installPlugin(id) {
   if (d && d.ok) {
     toast(`Плагин ${id} установлен`, 'ok');
     loadInstalledPlugins();
+    // Обновим detail-страницу, если открыта — появится форма отзыва
+    if (_pluginDetailCurrent === id) openPluginDetails(id);
   } else {
     toast('Не удалось установить: ' + (d?.detail || 'ошибка'), 'err');
   }
+}
+
+// ── Plugin detail page ──────────────────────────────────────────────────────
+let _pluginDetailCurrent = null;
+let _pluginShotIdx = 0;
+
+async function openPluginDetails(id) {
+  _pluginDetailCurrent = id;
+  _pluginShotIdx = 0;
+  // Скрываем список, показываем страницу деталей
+  document.getElementById('pl-store-card').style.display = 'none';
+  document.getElementById('pl-installed-card').style.display = 'none';
+  const page = document.getElementById('pl-detail-page');
+  page.style.display = 'block';
+  page.querySelector('.pl-detail-body').innerHTML =
+    '<div class="skeleton skeleton-line md" style="height:24px;margin-bottom:12px"></div>' +
+    '<div class="skeleton skeleton-line" style="height:14px"></div>' +
+    '<div class="skeleton skeleton-line sm" style="height:14px"></div>';
+
+  let d;
+  try {
+    d = await api('/api/plugins/store/' + encodeURIComponent(id) + '/details');
+  } catch (_) { d = null; }
+  if (!d || d.detail) {
+    page.querySelector('.pl-detail-body').innerHTML =
+      `<div class="text-dim" style="color:var(--red);padding:20px 0">Не удалось загрузить: ${esc(d?.detail || 'нет ответа от сервера')}</div>`;
+    return;
+  }
+  renderPluginDetail(d);
+  // Отзывы грузим отдельно (могут тормозить)
+  loadPluginReviews(id);
+}
+
+function closePluginDetails() {
+  document.getElementById('pl-detail-page').style.display = 'none';
+  document.getElementById('pl-store-card').style.display = '';
+  document.getElementById('pl-installed-card').style.display = '';
+  _pluginDetailCurrent = null;
+}
+
+function renderPluginDetail(p) {
+  const body = document.getElementById('pl-detail-page').querySelector('.pl-detail-body');
+  const idHtml = esc(p.id);
+  const idJs = escJsAttr(p.id);
+  const author = p.author ? esc(p.author) : '—';
+  const sizeKb = p.size ? `${(p.size / 1024).toFixed(1)} КБ` : '—';
+  const iconHtml = p.has_icon
+    ? `<img src="${getApiBase()}/api/plugins/store/${encodeURIComponent(p.id)}/icon"/>`
+    : `<div class="pl-ico-ph pl-ico-ph-big">${esc(((p.name||p.id)[0]||'?').toUpperCase())}</div>`;
+
+  const rating = p.reviews_count
+    ? `<span class="pl-rating-big">★ ${Number(p.rating||0).toFixed(1)}</span>
+       <span class="pl-rcount">· ${p.reviews_count} отзыв(ов)</span>`
+    : '<span class="pl-rating-none">Отзывов пока нет</span>';
+
+  const installed = !!(_plInstalledById && _plInstalledById[p.id]);
+  const installBtn = installed
+    ? '<button class="btn btn-sm" style="background:var(--bg3);color:var(--text);border:1px solid var(--border);cursor:default" disabled>✓ Установлен</button>'
+    : `<button class="btn btn-sm btn-primary" onclick="installPlugin('${idJs}')">⬇ Установить</button>`;
+
+  const shots = Array.isArray(p.screenshots) ? p.screenshots : [];
+  const shotsHtml = shots.length
+    ? `<div class="pl-shots">
+         <div class="pl-shots-viewport">
+           <img id="pl-shot-img" src="${getApiBase()}/api/plugins/store/${encodeURIComponent(p.id)}/screenshots/${shots[0]}"/>
+         </div>
+         ${shots.length > 1 ? `
+           <button class="pl-shot-nav pl-shot-prev" onclick="pluginShotPrev()">‹</button>
+           <button class="pl-shot-nav pl-shot-next" onclick="pluginShotNext()">›</button>
+           <div class="pl-shot-dots" id="pl-shot-dots">
+             ${shots.map((_,i)=>`<span class="pl-shot-dot${i===0?' active':''}" onclick="pluginShotGo(${i})"></span>`).join('')}
+           </div>` : ''}
+       </div>`
+    : '';
+  _pluginShotList = shots.map(n => `${getApiBase()}/api/plugins/store/${encodeURIComponent(p.id)}/screenshots/${n}`);
+
+  const desc = (p.long_description || p.description || '').trim();
+  const descHtml = desc
+    ? `<div class="pl-long-desc">${esc(desc).replace(/\n/g,'<br>')}</div>`
+    : '<div class="text-dim" style="font-size:12px">Описание пока не добавлено</div>';
+
+  body.innerHTML = `
+    <div class="pl-detail-hd">
+      <div class="pl-detail-ico">${iconHtml}</div>
+      <div class="pl-detail-meta">
+        <div class="pl-detail-title">${esc(p.name || p.id)}
+          <span class="pl-ver">v${esc(p.version || '?')}</span>
+        </div>
+        <div class="pl-detail-sub">${author} · ${sizeKb} · ${idHtml}</div>
+        <div class="pl-detail-rating">${rating}</div>
+      </div>
+      <div class="pl-detail-actions">${installBtn}</div>
+    </div>
+
+    ${shotsHtml}
+
+    <div class="pl-section-title">Описание</div>
+    ${descHtml}
+
+    <div class="pl-section-title">Отзывы <span id="pl-reviews-count" class="text-dim" style="font-weight:400"></span></div>
+    <div id="pl-review-form-wrap"></div>
+    <div id="pl-reviews-list">
+      <div class="text-dim" style="font-size:12px;padding:10px 0">Загрузка...</div>
+    </div>`;
+}
+
+let _pluginShotList = [];
+function pluginShotGo(idx) {
+  if (!_pluginShotList.length) return;
+  _pluginShotIdx = ((idx % _pluginShotList.length) + _pluginShotList.length) % _pluginShotList.length;
+  const img = document.getElementById('pl-shot-img');
+  if (img) img.src = _pluginShotList[_pluginShotIdx];
+  document.querySelectorAll('#pl-shot-dots .pl-shot-dot').forEach((el,i) => {
+    el.classList.toggle('active', i === _pluginShotIdx);
+  });
+}
+function pluginShotPrev() { pluginShotGo(_pluginShotIdx - 1); }
+function pluginShotNext() { pluginShotGo(_pluginShotIdx + 1); }
+
+async function loadPluginReviews(id) {
+  const listEl = document.getElementById('pl-reviews-list');
+  const formWrap = document.getElementById('pl-review-form-wrap');
+  const countEl = document.getElementById('pl-reviews-count');
+  let d;
+  try {
+    d = await api('/api/plugins/store/' + encodeURIComponent(id) + '/reviews');
+  } catch (_) { d = null; }
+  if (!d || d.detail) {
+    listEl.innerHTML = `<div class="text-dim" style="color:var(--red)">Не удалось загрузить отзывы</div>`;
+    return;
+  }
+  const reviews = d.reviews || [];
+  if (countEl) countEl.textContent = reviews.length ? `(${reviews.length})` : '';
+
+  // Форма отзыва: только если плагин был скачан этим юзером
+  if (d.can_review) {
+    const mine = reviews.find(r => r.mine);
+    formWrap.innerHTML = renderReviewForm(id, mine);
+    attachStarHandlers();
+  } else {
+    formWrap.innerHTML =
+      '<div class="pl-review-gate">Чтобы оставить отзыв — установи плагин</div>';
+  }
+
+  if (!reviews.length) {
+    listEl.innerHTML =
+      '<div class="text-dim" style="font-size:12px;padding:10px 0">Пока никто не оставил отзыв. Будь первым!</div>';
+    return;
+  }
+  listEl.innerHTML = reviews.map(renderReviewItem).join('');
+}
+
+function renderReviewItem(r) {
+  const rr = Math.max(0, Math.min(5, r.rating || 0));
+  const stars = '★'.repeat(rr) + '☆'.repeat(5 - rr);
+  const when = r.created_at ? _formatAgo(r.created_at * 1000) : '';
+  const mine = r.mine ? '<span class="pl-rv-mine">мой отзыв</span>' : '';
+  return `
+    <div class="pl-review">
+      <div class="pl-rv-hd">
+        <span class="pl-rv-stars">${stars}</span>
+        <span class="pl-rv-author">${esc(r.author || 'Аноним')}</span>
+        ${mine}
+        <span class="pl-rv-when">${esc(when)}</span>
+      </div>
+      <div class="pl-rv-text">${esc(r.text || '').replace(/\n/g,'<br>')}</div>
+    </div>`;
+}
+
+function renderReviewForm(id, existing) {
+  const r = existing?.rating || 0;
+  const txt = existing?.text || '';
+  const author = existing?.author || '';
+  const title = existing ? 'Изменить свой отзыв' : 'Оставить отзыв';
+  const delBtn = existing
+    ? `<button class="btn btn-sm" style="background:var(--bg3);color:var(--red);border:1px solid var(--border);margin-left:6px" onclick="deleteMyReview('${escJsAttr(id)}')">Удалить свой</button>`
+    : '';
+  const starsHtml = [1,2,3,4,5].map(n => `
+    <span class="pl-star${n <= r ? ' active' : ''}" data-val="${n}">★</span>`).join('');
+  return `
+    <div class="pl-review-form">
+      <div class="pl-rf-title">${title}</div>
+      <div class="pl-stars" id="pl-rf-stars" data-rating="${r}">${starsHtml}</div>
+      <input type="text" id="pl-rf-author" value="${esc(author)}" placeholder="Имя (по желанию, до 40 символов)" maxlength="40"/>
+      <textarea id="pl-rf-text" placeholder="Поделись опытом, как работает плагин..." maxlength="2000">${esc(txt)}</textarea>
+      <div class="pl-rf-actions">
+        <button class="btn btn-sm btn-primary" onclick="submitReview('${escJsAttr(id)}')">Отправить</button>
+        ${delBtn}
+      </div>
+    </div>`;
+}
+
+function attachStarHandlers() {
+  document.querySelectorAll('#pl-rf-stars .pl-star').forEach(s => {
+    s.addEventListener('click', () => {
+      const v = parseInt(s.dataset.val, 10);
+      const wrap = document.getElementById('pl-rf-stars');
+      wrap.dataset.rating = v;
+      wrap.querySelectorAll('.pl-star').forEach(st => {
+        st.classList.toggle('active', parseInt(st.dataset.val, 10) <= v);
+      });
+    });
+  });
+}
+
+async function submitReview(id) {
+  const rating = parseInt(document.getElementById('pl-rf-stars').dataset.rating || '0', 10);
+  if (rating < 1 || rating > 5) {
+    toast('Поставь оценку от 1 до 5 звёзд', 'err');
+    return;
+  }
+  const author = document.getElementById('pl-rf-author').value.trim();
+  const text = document.getElementById('pl-rf-text').value.trim();
+  const d = await apiPost('/api/plugins/store/' + encodeURIComponent(id) + '/reviews',
+    { rating, author, text });
+  if (d && d.ok) {
+    toast('Отзыв отправлен', 'ok');
+    loadPluginReviews(id);
+  } else {
+    toast('Не получилось: ' + (d?.detail || 'ошибка'), 'err');
+  }
+}
+
+async function deleteMyReview(id) {
+  if (!await confirmModal('Удалить свой отзыв?', {okText:'Удалить', danger:true})) return;
+  try {
+    const r = await fetch(getApiBase() + '/api/plugins/store/' + encodeURIComponent(id) + '/reviews/mine',
+      { method: 'DELETE', headers: { 'X-Token': getApiToken() } });
+    const d = await r.json();
+    if (d.ok) {
+      toast('Отзыв удалён', 'ok');
+      loadPluginReviews(id);
+    } else {
+      toast('Ошибка: ' + (d.detail || '—'), 'err');
+    }
+  } catch (e) { toast('Ошибка сети', 'err'); }
 }
 
 // ── Settings modal ──
