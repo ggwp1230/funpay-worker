@@ -1837,7 +1837,8 @@ async function loadPluginReviews(id) {
 }
 
 function renderReviewItem(r) {
-  const stars = '★'.repeat(r.rating || 0) + '☆'.repeat(5 - (r.rating || 0));
+  const rr = Math.max(0, Math.min(5, r.rating || 0));
+  const stars = '★'.repeat(rr) + '☆'.repeat(5 - rr);
   const when = r.created_at ? _formatAgo(r.created_at * 1000) : '';
   const mine = r.mine ? '<span class="pl-rv-mine">мой отзыв</span>' : '';
   return `

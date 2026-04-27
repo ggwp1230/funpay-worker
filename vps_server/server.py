@@ -10,6 +10,7 @@ import json
 import os
 import re
 import shutil
+import threading
 import time
 import zipfile
 from pathlib import Path
@@ -363,39 +364,66 @@ def _plugin_paths(plugin_id: str) -> tuple[Path, Path]:
     return PLUGINS_DIR / f"{plugin_id}.zip", PLUGINS_DIR / f"{plugin_id}.json"
 
 
-def _plugin_dir(plugin_id: str) -> Path:
+def _plugin_dir(plugin_id: str, create: bool = False) -> Path:
+    """Путь до директории с расширенными данными плагина. По умолчанию только
+    возвращает путь (без побочных эффектов), create=True — вызывается из
+    write-paths и создаёт директорию."""
     d = PLUGINS_DIR / plugin_id
-    d.mkdir(parents=True, exist_ok=True)
+    if create:
+        d.mkdir(parents=True, exist_ok=True)
     return d
 
 
-def _plugin_details_file(plugin_id: str) -> Path:
+def _plugin_details_file(plugin_id: str, create: bool = False) -> Path:
     """JSON с long_description, screenshots[], обновляется через админку."""
-    return _plugin_dir(plugin_id) / "details.json"
+    return _plugin_dir(plugin_id, create=create) / "details.json"
 
 
-def _plugin_reviews_file(plugin_id: str) -> Path:
-    return _plugin_dir(plugin_id) / "reviews.json"
+def _plugin_reviews_file(plugin_id: str, create: bool = False) -> Path:
+    return _plugin_dir(plugin_id, create=create) / "reviews.json"
 
 
-def _plugin_downloads_file(plugin_id: str) -> Path:
-    return _plugin_dir(plugin_id) / "downloads.json"
+def _plugin_downloads_file(plugin_id: str, create: bool = False) -> Path:
+    return _plugin_dir(plugin_id, create=create) / "downloads.json"
 
 
 def _plugin_icon_file(plugin_id: str) -> Optional[Path]:
+    d = _plugin_dir(plugin_id)
+    if not d.exists():
+        return None
     for ext in ("png", "jpg", "jpeg", "webp"):
-        p = _plugin_dir(plugin_id) / f"icon.{ext}"
+        p = d / f"icon.{ext}"
         if p.exists():
             return p
     return None
 
 
 def _plugin_screenshot_file(plugin_id: str, n: int) -> Optional[Path]:
+    d = _plugin_dir(plugin_id)
+    if not d.exists():
+        return None
     for ext in ("png", "jpg", "jpeg", "webp"):
-        p = _plugin_dir(plugin_id) / f"s{n}.{ext}"
+        p = d / f"s{n}.{ext}"
         if p.exists():
             return p
     return None
+
+
+# Защита от гонок при read-modify-write на reviews.json / downloads.json.
+# FastAPI гоняет sync-хендлеры в thread pool — два POST /reviews на один и тот
+# же плагин могут стереть данные друг друга. Лочим отдельно per plugin_id,
+# чтобы разные плагины не блокировали друг друга.
+_plugin_locks_mu = threading.Lock()
+_plugin_locks: dict[str, threading.Lock] = {}
+
+
+def _plugin_lock(plugin_id: str) -> threading.Lock:
+    with _plugin_locks_mu:
+        lk = _plugin_locks.get(plugin_id)
+        if lk is None:
+            lk = threading.Lock()
+            _plugin_locks[plugin_id] = lk
+        return lk
 
 
 def _load_json(path: Path, default):
@@ -408,8 +436,11 @@ def _load_json(path: Path, default):
 
 
 def _save_json(path: Path, data):
+    """Атомарная запись: tmp + rename, чтобы не оставить полу-файл при падении."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    os.replace(tmp, path)
 
 
 def _token_hash(token: str) -> str:
@@ -425,14 +456,15 @@ def _record_download(plugin_id: str, token: str):
     if not token:
         return
     th = _token_hash(token)
-    path = _plugin_downloads_file(plugin_id)
-    data = _load_json(path, {})
-    if not isinstance(data, dict):
-        data = {}
-    if th not in data:
-        data[th] = {"first_at": time.time()}
-    data[th]["last_at"] = time.time()
-    _save_json(path, data)
+    path = _plugin_downloads_file(plugin_id, create=True)
+    with _plugin_lock(plugin_id):
+        data = _load_json(path, {})
+        if not isinstance(data, dict):
+            data = {}
+        if th not in data:
+            data[th] = {"first_at": time.time()}
+        data[th]["last_at"] = time.time()
+        _save_json(path, data)
 
 
 def _has_downloaded(plugin_id: str, token: str) -> bool:
@@ -568,12 +600,14 @@ async def admin_plugin_set_details(
     _, json_path = _plugin_paths(plugin_id)
     if not json_path.exists():
         raise HTTPException(404, "Плагин не найден")
-    details = _load_json(_plugin_details_file(plugin_id), {})
-    if not isinstance(details, dict):
-        details = {}
-    details["long_description"] = (long_description or "").strip()[:20000]
-    details["updated_at"] = time.time()
-    _save_json(_plugin_details_file(plugin_id), details)
+    path = _plugin_details_file(plugin_id, create=True)
+    with _plugin_lock(plugin_id):
+        details = _load_json(path, {})
+        if not isinstance(details, dict):
+            details = {}
+        details["long_description"] = (long_description or "").strip()[:20000]
+        details["updated_at"] = time.time()
+        _save_json(path, details)
     return {"ok": True}
 
 
@@ -607,7 +641,7 @@ async def admin_plugin_upload_icon(
     raw = await file.read()
     if not raw or len(raw) > 2_000_000:
         raise HTTPException(400, "Картинка пустая или больше 2 МБ")
-    _write_image(_plugin_dir(plugin_id), "icon", file, raw)
+    _write_image(_plugin_dir(plugin_id, create=True), "icon", file, raw)
     return {"ok": True}
 
 
@@ -638,7 +672,7 @@ async def admin_plugin_upload_screenshot(
     raw = await file.read()
     if not raw or len(raw) > 5_000_000:
         raise HTTPException(400, "Картинка пустая или больше 5 МБ")
-    _write_image(_plugin_dir(plugin_id), f"s{slot}", file, raw)
+    _write_image(_plugin_dir(plugin_id, create=True), f"s{slot}", file, raw)
     return {"ok": True, "slot": slot}
 
 
@@ -688,11 +722,12 @@ def admin_plugin_delete_review(plugin_id: str, review_id: str,
     if not PLUGIN_ID_RE.match(plugin_id):
         raise HTTPException(400, "Невалидный id")
     path = _plugin_reviews_file(plugin_id)
-    reviews = _load_json(path, [])
-    if not isinstance(reviews, list):
-        reviews = []
-    new = [r for r in reviews if r.get("id") != review_id]
-    _save_json(path, new)
+    with _plugin_lock(plugin_id):
+        reviews = _load_json(path, [])
+        if not isinstance(reviews, list):
+            reviews = []
+        new = [r for r in reviews if r.get("id") != review_id]
+        _save_json(path, new)
     return {"ok": True}
 
 @app.get("/plugins")
@@ -857,31 +892,32 @@ def public_plugin_post_review(plugin_id: str,
     author = (body.author or "").strip()[:40] or "Аноним"
 
     th = _token_hash(x_token or "")
-    path = _plugin_reviews_file(plugin_id)
-    reviews = _load_json(path, [])
-    if not isinstance(reviews, list):
-        reviews = []
-    # Upsert — один токен = один отзыв; повторная отправка обновляет.
-    now = time.time()
-    existing = next((r for r in reviews if r.get("token_hash") == th), None)
-    if existing:
-        existing.update({
-            "author": author, "rating": rating, "text": text,
-            "updated_at": now, "approved": existing.get("approved", True),
-        })
-        rid = existing.get("id")
-    else:
-        rid = hashlib.sha256(f"{th}-{now}".encode()).hexdigest()[:16]
-        reviews.append({
-            "id": rid,
-            "token_hash": th,
-            "author": author,
-            "rating": rating,
-            "text": text,
-            "created_at": now,
-            "approved": True,
-        })
-    _save_json(path, reviews)
+    path = _plugin_reviews_file(plugin_id, create=True)
+    with _plugin_lock(plugin_id):
+        reviews = _load_json(path, [])
+        if not isinstance(reviews, list):
+            reviews = []
+        # Upsert — один токен = один отзыв; повторная отправка обновляет.
+        now = time.time()
+        existing = next((r for r in reviews if r.get("token_hash") == th), None)
+        if existing:
+            existing.update({
+                "author": author, "rating": rating, "text": text,
+                "updated_at": now, "approved": existing.get("approved", True),
+            })
+            rid = existing.get("id")
+        else:
+            rid = hashlib.sha256(f"{th}-{now}".encode()).hexdigest()[:16]
+            reviews.append({
+                "id": rid,
+                "token_hash": th,
+                "author": author,
+                "rating": rating,
+                "text": text,
+                "created_at": now,
+                "approved": True,
+            })
+        _save_json(path, reviews)
     return {"ok": True, "id": rid}
 
 
@@ -895,13 +931,14 @@ def public_plugin_delete_my_review(plugin_id: str,
         raise HTTPException(400, "Невалидный id")
     th = _token_hash(x_token or "")
     path = _plugin_reviews_file(plugin_id)
-    reviews = _load_json(path, [])
-    if not isinstance(reviews, list):
-        reviews = []
-    new = [r for r in reviews if r.get("token_hash") != th]
-    if len(new) == len(reviews):
-        raise HTTPException(404, "Отзыв не найден")
-    _save_json(path, new)
+    with _plugin_lock(plugin_id):
+        reviews = _load_json(path, [])
+        if not isinstance(reviews, list):
+            reviews = []
+        new = [r for r in reviews if r.get("token_hash") != th]
+        if len(new) == len(reviews):
+            raise HTTPException(404, "Отзыв не найден")
+        _save_json(path, new)
     return {"ok": True}
 
 @app.get("/admin", response_class=HTMLResponse)
