@@ -1040,8 +1040,48 @@ async def lifespan(app: FastAPI):
             bot.log.add("info" if ok else "error", "system", f"AUTO_START: {msg}")
         except Exception as e:
             bot.log.add("error", "system", f"AUTO_START failed: {e}")
-    yield
-    bot.stop()
+
+    # Watchdog: раз в минуту проверяем что бот живой, и если он лёг
+    # (например FunPayAPI разорвал сессию и _loop_with_restart уже сдался),
+    # но golden_key всё ещё сохранён — тихо стартуем заново. Это даёт
+    # настоящий 24/7 keepalive независимо от любых разовых сбоев.
+    watchdog_stop = asyncio.Event()
+
+    async def _bot_watchdog():
+        while not watchdog_stop.is_set():
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                break
+            try:
+                if bot.is_running:
+                    continue
+                # Бот стоит. Проверяем — был ли это явный stop от пользователя
+                # (тогда не вмешиваемся) или бот просто лёг.
+                if bot.status == "stopped":
+                    continue
+                if not get_secure_golden_key():
+                    continue
+                ok, msg = bot.start()
+                bot.log.add(
+                    "info" if ok else "error",
+                    "system",
+                    f"watchdog: рестарт ({msg})",
+                )
+            except Exception as e:
+                bot.log.add("error", "system", f"watchdog failed: {e}")
+
+    watchdog_task = asyncio.create_task(_bot_watchdog())
+    try:
+        yield
+    finally:
+        watchdog_stop.set()
+        watchdog_task.cancel()
+        try:
+            await watchdog_task
+        except (asyncio.CancelledError, Exception):
+            pass
+        bot.stop()
 
 app = FastAPI(title="FP Nexus API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])

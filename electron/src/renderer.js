@@ -783,6 +783,18 @@ async function obConnect() {
   } catch (_) {}
 
   if (hasKey) {
+    // Если бот не запущен на VPS (например упал, превысил MAX_RESTARTS,
+    // или контейнер только что поднялся без AUTO_START) — стартуем тихо.
+    // Идемпотентно: сервер вернёт "Бот уже запущен" если уже работает.
+    try {
+      const isRunning = !!(probe.data && probe.data.is_running);
+      if (!isRunning) {
+        await fetch(host + '/api/start', {
+          method: 'POST',
+          headers: { 'X-Token': token },
+        });
+      }
+    } catch (_) {}
     document.getElementById('onboarding').style.display = 'none';
     setTimeout(connectWS, 500);
     setTimeout(updateStatus, 800);
