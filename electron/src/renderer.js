@@ -881,6 +881,7 @@ async function showOnboarding() {
   // Если в localStorage уже есть VPS-URL и токен, и VPS-воркер на них живой —
   // не показываем онбординг (юзер уже подключён). Иначе показываем.
   let configured = false;
+  let statusData = null;
   const host  = (localStorage.getItem('ob_host')  || '').trim();
   const token = (localStorage.getItem('ob_token') || '').trim();
   // Бесшумно подцепляем OTA, если он ещё не привязан (миграция со старых версий).
@@ -895,10 +896,17 @@ async function showOnboarding() {
       });
       clearTimeout(t);
       configured = r.ok;
+      if (r.ok) {
+        try { statusData = await r.json(); } catch (_) {}
+      }
     } catch (_) { /* VPS недоступен — попросим юзера ввести заново */ }
   }
   if (configured) {
     ob.style.display = 'none';
+    // Авто-резюм бота: если на VPS уже сохранён golden_key, но бот стоит
+    // (контейнер только что поднялся / упал и watchdog ещё не сработал /
+    // юзер закрывал приложение и переоткрывает) — тихо стартуем. Идемпотентно.
+    _autoResumeBot(host.replace(/\/+$/, ''), token, statusData);
     return;
   }
   ob.style.display = 'flex';
@@ -906,6 +914,23 @@ async function showOnboarding() {
     const t = document.getElementById('ob-token');
     if (t) t.focus();
   }, 300);
+}
+
+async function _autoResumeBot(host, token, statusData) {
+  try {
+    if (statusData && statusData.is_running) return;
+    // Проверяем что golden_key сохранён на VPS — иначе /api/start вернёт ошибку
+    const cfgRes = await fetch(host + '/api/config', {
+      headers: { 'X-Token': token },
+    });
+    if (!cfgRes.ok) return;
+    const cfg = await cfgRes.json();
+    if (!cfg || !cfg.has_key) return;
+    await fetch(host + '/api/start', {
+      method: 'POST',
+      headers: { 'X-Token': token },
+    });
+  } catch (_) {}
 }
 
 // ─── Logout ──────────────────────────────────────────────────────────────────
