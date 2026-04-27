@@ -1382,11 +1382,20 @@ class PluginToggleBody(BaseModel):
     enabled: bool
 
 def _vps_session() -> tuple[str, str, dict]:
-    """Возвращает (url, token, headers) для походов на сервер обновлений."""
+    """Возвращает (url, token, headers) для походов на сервер обновлений.
+
+    На VPS-инстансе fp-токен лежит в env ACCESS_TOKEN — его и используем
+    для авторизации на центральном сервере (он проверяет тот же токен).
+    В локальном Electron-режиме токен берём из update_server.token,
+    привязанного через /api/update/connect.
+    """
     cfg = load_config()
     ucfg = cfg.get("update_server") or {}
-    url = (ucfg.get("url") or "").rstrip("/")
+    url = (ucfg.get("url") or DEFAULT_UPDATE_URL).rstrip("/")
     token = (ucfg.get("token") or "").strip()
+    if not token:
+        # VPS-режим: fp-токен только в env, в config его нет
+        token = (os.environ.get("ACCESS_TOKEN") or "").strip()
     if not url or not token:
         raise HTTPException(400, "Сервер обновлений не настроен")
     return url, token, {"X-Token": token}
