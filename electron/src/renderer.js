@@ -387,6 +387,16 @@ async function loadSettings() {
     gkInput.placeholder = 'Вставьте значение куки golden_key';
   }
   gkInput.value = '';
+  // Чтобы браузерный autocomplete не подсовывал сюда сохранённый пароль —
+  // меняем имя поля на одноразовое (Chrome привязывается к id+name).
+  try { gkInput.setAttribute('name', 'gk-' + Date.now()); } catch(_) {}
+  // Меняем подпись о месте хранения под фактический режим.
+  const hint = document.getElementById('gk-storage-hint');
+  if (hint) {
+    hint.innerHTML = _isVpsMode()
+      ? '🔒 Ключ хранится <b>на вашем VPS</b> (зашифрованным в data-volume). Бот держит сессию даже когда приложение закрыто.'
+      : '🔒 Ключ хранится в <b>Windows Credential Manager</b> (DPAPI) — не в файлах на диске';
+  }
   document.getElementById('cfg-ua').value = d.user_agent || '';
 }
 

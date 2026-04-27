@@ -326,10 +326,10 @@
           <div class="form-group form-full">
             <label>Golden Key (токен аккаунта FunPay)</label>
             <div style="display:flex;gap:8px;align-items:center">
-              <input type="password" id="cfg-gk" placeholder="Вставьте значение куки golden_key" style="flex:1">
+              <input type="password" id="cfg-gk" placeholder="Вставьте значение куки golden_key" style="flex:1" autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false">
               <button class="btn btn-sm btn-danger" onclick="deleteGoldenKey()" title="Удалить ключ из хранилища">🗑</button>
             </div>
-            <div class="input-hint">
+            <div class="input-hint" id="gk-storage-hint">
               🔒 Ключ хранится в <b>Windows Credential Manager</b> (DPAPI) — не в файлах на диске
             </div>
           </div>
